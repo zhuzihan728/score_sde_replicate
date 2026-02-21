@@ -1,0 +1,3 @@
+module load anaconda/3.2019-10
+eval "$(conda shell.bash hook)"
+conda activate /rds/user/$crsid/hpc-work/MLMI4/envs/score_sde_env

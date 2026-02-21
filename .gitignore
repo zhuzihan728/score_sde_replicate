@@ -41,7 +41,7 @@ env/
 *.ipynb_checkpoints
 
 # Environment
-envs/
+envs/*
 !/envs/README.SCORE_SDE.activate
 
 # Experiments
