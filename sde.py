@@ -2,11 +2,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-
-def batch_mul(a, b):
-    """Element-wise multiply a (batch,) with b (batch, ...) via vmap."""
-    return jax.vmap(lambda a, b: a * b)(a, b)
+from utils import batch_mul
 
 
 class VPSDE:
@@ -52,10 +48,11 @@ class VPSDE:
         G = jnp.sqrt(beta)
         return f, G
 
-    def reverse_sde(self, x, t, score):
+    def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
-        rev_f = f - batch_mul(g ** 2, score)
+        score_factor = 0.5 if probability_flow else 1
+        rev_f = f - batch_mul(g ** 2, score*score_factor)
         return rev_f, g
 
 
@@ -91,10 +88,11 @@ class subVPSDE:
         """Sample from p_T ≈ N(0, I)."""
         return jax.random.normal(rng, shape)
 
-    def reverse_sde(self, x, t, score):
+    def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
-        rev_f = f - batch_mul(g ** 2, score)
+        score_factor = 0.5 if probability_flow else 1
+        rev_f = f - batch_mul(g ** 2, score*factor)
         return rev_f, g
 
 
@@ -137,8 +135,9 @@ class VESDE:
         adj = jnp.where(timestep == 0, jnp.zeros_like(sigma), self.discrete_sigmas[timestep - 1])
         return jnp.zeros_like(x), jnp.sqrt(sigma ** 2 - adj ** 2)
 
-    def reverse_sde(self, x, t, score):
+    def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
-        rev_f = f - batch_mul(g ** 2, score)
+        score_factor = 0.5 if probability_flow else 1
+        rev_f = f - batch_mul(g ** 2, score*factor)
         return rev_f, g
