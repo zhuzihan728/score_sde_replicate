@@ -109,5 +109,6 @@ def train(config):
 
 
 if __name__ == '__main__':
-    config = get_config_local()
+    dataset = "cifar10"
+    config = get_config_local(dataset=dataset)
     ema_params, model, sde = train(config)

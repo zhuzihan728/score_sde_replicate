@@ -38,16 +38,45 @@ def get_config():
 
     return config
 
-def get_config_local():
+def get_config_local(dataset):
     """Tiny config for local testing on CPU/laptop."""
     config = get_config()
 
-    # Shrink everything for fast local testing
-    config.training.batch_size = 4
-    config.training.n_iters = 100
-    config.training.warmup = 10 
-    config.model.nf = 32              # 32 channels instead of 128
-    config.model.num_res_blocks = 1   # 1 block instead of 4
-    config.model.num_scales = 100     # 100 steps instead of 1000
+    def get_config_cifar10():
+        # Shrink everything for fast local testing
+        config.training.batch_size = 4
+        config.training.n_iters = 100
+        config.training.warmup = 10 
+        config.model.nf = 32              # 32 channels instead of 128
+        config.model.num_res_blocks = 1   # 1 block instead of 4
+        config.model.num_scales = 100     # 100 steps instead of 1000
 
-    return config
+        return config
+
+    def get_config_celeba():
+        """CelebA config with VE SDE."""
+        config = get_config()
+        config.data.dataset = 'celeb_a'
+        config.data.image_size = 64
+        config.model.sigma_max = 90.0     # Larger images need more noise
+        return config
+
+    def get_config_lsun_bedroom():
+        """LSUN Bedroom config with VE SDE."""
+        config = get_config()
+        config.data.dataset = 'lsun/bedroom'
+        config.data.image_size = 256
+        config.training.batch_size = 64   # Smaller batch for larger images
+        config.model.sigma_max = 348.0    # Even more noise for 256x256
+        return config
+    
+    if dataset in ["cifar10", "celeb_a", "lsun/bedroom"]:
+        if dataset == "cifar10":
+            return get_config_cifar10()
+        elif dataset == "celeb_a":
+            return get_config_celeba()
+        elif dataset == "lsun/bedroom":
+            return get_config_lsun_bedroom()
+    else:
+        raise ValueError("Dataset not present/allowed")
+    
