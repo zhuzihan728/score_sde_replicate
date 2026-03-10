@@ -78,5 +78,5 @@ def get_config_local(dataset):
         elif dataset == "lsun/bedroom":
             return get_config_lsun_bedroom()
     else:
-        raise ValueError("Dataset not present/allowed")
+        raise ValueError(f"Unknown Dataset: {dataset}")
     
