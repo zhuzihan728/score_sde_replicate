@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 
-def get_loss_fn(sde, model, train, reduce_mean=False):
+def get_loss_fn(sde, model, train, reduce_mean=False,  continuous=False):
 
     def loss_fn(rng, params, batch):
         """Compute one training loss.
@@ -17,9 +17,13 @@ def get_loss_fn(sde, model, train, reduce_mean=False):
         """
         # Step 1: Sample random times
         rng, step_rng = jax.random.split(rng)
-        t = jax.random.uniform(step_rng, (batch.shape[0],), 
-                               minval=1e-5, maxval=1.0)
-
+        if continuous:
+            t = jax.random.uniform(step_rng, (batch.shape[0],),
+                                   minval=1e-5, maxval=1.0)
+        else:
+            t = jax.random.randint(step_rng, (batch.shape[0],),
+                                   minval=0, maxval=sde.N)
+            t = t.astype(jnp.float32)  # Flax layers expect float input
         # Step 2: Sample noise
         rng, step_rng = jax.random.split(rng)
         z = jax.random.normal(step_rng, batch.shape)
