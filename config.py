@@ -30,6 +30,13 @@ def get_config():
     # VP SDE params (used when training.sde is vpsde or subvpsde)
     model.beta_min = 0.1
     model.beta_max = 20.0
+    
+    # Architecture improvements (NCSN++ vs baseline)
+    model.fir = True                  # FIR anti-aliased resampling
+    model.skip_rescale = True         # Rescale skip connections by 1/√2
+    model.resblock_type = 'biggan'    # 'ddpm' (baseline) or 'biggan' (improved)
+    model.progressive_input = 'residual'  # 'none' or 'residual' or 'input_skip'
+    model.progressive_output = 'none'     # 'none' or 'residual' or 'output_skip'
 
     # Training 
     config.training = training = ml_collections.ConfigDict()
