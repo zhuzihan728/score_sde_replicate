@@ -28,6 +28,33 @@ class GaussianFourierFeatures(nn.Module):
         # Output both sin and cos -> 2 * embed_dim features
         return jnp.concatenate([jnp.sin(t_proj), jnp.cos(t_proj)], axis=-1)
 
+class SinusoidalPosEmb(nn.Module):
+    """
+    Map an integer timestep to a high-dimensional embedding.
+
+    GaussianFourierFeatures: continuous t in [0,1] → random frequencies
+    SinusoidalPosEmb: discrete i in {0,...,N-1} → fixed frequencies
+    """
+    embed_dim: int = 128
+
+    @nn.compact
+    def __call__(self, timesteps):
+        # timesteps shape: [B] — integer noise level indices
+
+        half_dim = self.embed_dim // 2
+        
+        # Frequencies: exponentially spaced from 1 to 1/10000
+        # Same formula as "Attention Is All You Need"
+        freq = jnp.exp(
+            -jnp.log(10000.0) * jnp.arange(half_dim) / (half_dim - 1)
+        )
+        
+        # Outer product: each timestep × each frequency
+        # [B, 1] * [half_dim] → [B, half_dim]
+        args = timesteps[:, None] * freq[None, :]
+        
+        # Sin and cos → [B, embed_dim]
+        return jnp.concatenate([jnp.sin(args), jnp.cos(args)], axis=-1)
 
 
 class ResnetBlock(nn.Module):
@@ -146,10 +173,14 @@ class UNet(nn.Module):
 
         # TIME EMBEDDING 
         # t: [B] → temb: [B, nf*4]
-        temb = GaussianFourierFeatures(embed_dim=nf)(t)  # [B, nf*2]
-        temb = nn.Dense(nf * 4)(temb)                     # [B, nf*4]
+        continuous = config.training.continuous
+        if continuous:
+            temb = GaussianFourierFeatures(embed_dim=nf)(t)  # [B, nf*2]
+        else:
+            temb = SinusoidalPosEmb(embed_dim=nf * 2)(t)     # [B, nf*2]
+        temb = nn.Dense(nf * 4)(temb)                         # [B, nf*4]
         temb = nn.swish(temb)
-        temb = nn.Dense(nf * 4)(temb)                     # [B, nf*4]
+        temb = nn.Dense(nf * 4)(temb)                         # [B, nf*4]
 
         # ENCODER
         # Initial conv: [B, 32, 32, 3] → [B, 32, 32, nf]
