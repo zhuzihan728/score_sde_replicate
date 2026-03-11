@@ -55,7 +55,7 @@ def train(config):
 
     # Loss function
     loss_fn = get_loss_fn(sde, model, train=True, 
-                          reduce_mean=config.training.reduce_mean)
+                          reduce_mean=config.training.reduce_mean, continuous=config.training.continuous)
 
     # TRAIN STEP 
     @jax.jit
