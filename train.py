@@ -4,7 +4,7 @@ import optax
 import functools
 from config import get_config_local
 from datasets import get_dataset, get_data_scaler, get_data_inverse_scaler
-from sde_lib import VESDE
+from sde import get_sde
 from model import UNet
 from losses import get_loss_fn
 import matplotlib.pyplot as plt
@@ -21,11 +21,8 @@ def train(config):
     train_iter = iter(train_ds)
 
     # SDE
-    sde = VESDE(
-        sigma_min=config.model.sigma_min,
-        sigma_max=config.model.sigma_max,
-        N=config.model.num_scales
-    )
+
+    sde = get_sde(config)
 
     # Model
     model = UNet(config=config)

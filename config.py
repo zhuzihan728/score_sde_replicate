@@ -47,7 +47,31 @@ def get_config():
     training.grad_clip = 1.0
     training.continuous = True
     training.reduce_mean = False
-    training.sde = 'vesde'
+    # SDE 
+    training.sde = 'vesde' # Change to vpsde, subvpsde
+    training.sde_N = 1000
+    # VESDE settings
+    training.sde_sigma_min = 0.01
+    training.sde_sigma_max = 50.0
+    # VPSDE and Sub-VPSDE settings
+    training.sde_beta_min = 0.1
+    training.sde_beta_max = 20.0
+
+    # Sampler
+    config.sampler = sampler = ml_collections.ConfigDict()
+    sampler.denoise = True
+    sampler.type = 'PC' # For an ODE sampler, change to ODE 
+    # Configurations for PC sampling
+    sampler.predictor = 'Euler-Maruyama'
+    sampler.corrector = 'Langevin'
+    sampler.corrector_snr = 0.1
+    sampler.corrector_steps = 5
+    sampler.sampler_steps = 5
+    # Configurations for ODE sampling
+    sampler.rtol=1e-5
+    sampler.atol = 1e-5
+    sampler.method = 'RK45'
+    sampler.eps=1e-3
 
     return config
 

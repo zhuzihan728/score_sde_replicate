@@ -4,6 +4,14 @@ import jax.numpy as jnp
 import numpy as np
 from utils import batch_mul
 
+def get_sde(config):
+    N = config.training.sde_N
+    if config.training.sde == 'vesde':
+        return VESDE(config.training.sde_sigma_min, config.training.sde_sigma_max, N)
+    elif config.training.sde == 'vpsde':
+        return VPSDE(config.training.sde_beta_min, config.training.sde_beta_max, N)
+    else:
+        return subVPSDE(config.training.sde_beta_min, config.training.sde_beta_max, N)
 
 class VPSDE:
     """β(t) = β_min + t(β_max − β_min), variance-preserving SDE."""
@@ -24,7 +32,7 @@ class VPSDE:
         log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
         mean = batch_mul(jnp.exp(log_mean_coeff), x)
         std = jnp.sqrt(1.0 - jnp.exp(2.0 * log_mean_coeff))
-        return mean, std
+        return mean, std[:, None, None, None]
 
     def sde(self, x, t):
         """Drift f and diffusion g of dx = f dt + g dW."""
@@ -72,7 +80,7 @@ class subVPSDE:
         log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
         mean = batch_mul(jnp.exp(log_mean_coeff), x)
         std = 1.0 - jnp.exp(2.0 * log_mean_coeff)
-        return mean, std
+        return mean, std[:, None, None, None]
 
     def sde(self, x, t):
         """Drift f and diffusion g of dx = f dt + g dW."""
@@ -92,7 +100,7 @@ class subVPSDE:
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
         score_factor = 0.5 if probability_flow else 1
-        rev_f = f - batch_mul(g ** 2, score*factor)
+        rev_f = f - batch_mul(g ** 2, score*score_factor)
         return rev_f, g
 
 
@@ -113,7 +121,7 @@ class VESDE:
     def marginal_prob(self, x, t):
         """p_t(x_t | x_0): mean = x_0, std = σ(t)."""
         std = self.sigma_min * (self.sigma_max / self.sigma_min) ** t
-        return x, std
+        return x, std[:, None, None, None]
 
     def sde(self, x, t):
         """Drift f and diffusion g of the forward SDE dx = f dt + g dW."""
@@ -139,5 +147,5 @@ class VESDE:
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
         score_factor = 0.5 if probability_flow else 1
-        rev_f = f - batch_mul(g ** 2, score*factor)
+        rev_f = f - batch_mul(g ** 2, score*score_factor)
         return rev_f, g
