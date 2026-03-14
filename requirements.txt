@@ -1,0 +1,12 @@
+ipykernel
+jax[cpu]
+numpy
+optax
+flax
+orbax-checkpoint<0.11.0
+tensorflow
+ml_collections
+scipy
+matplotlib
+importlib-resources
+tensorflow_datasets
