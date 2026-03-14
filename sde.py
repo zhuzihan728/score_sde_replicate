@@ -1,6 +1,7 @@
 """VE / VP / sub-VP SDEs for score-based generative modelling."""
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
 import numpy as np
 from utils import batch_mul
 
@@ -46,6 +47,11 @@ class VPSDE:
     def prior_sampling(self, rng, shape):
         """Sample from p_T ≈ N(0, I)."""
         return jax.random.normal(rng, shape)
+    
+    def prior_logp(self, x):
+        logprob = jsp.stats.norm.logpdf(x)
+        axes = tuple(range(1,x.ndim))
+        return jnp.sum(logprob, axis=axes)
 
     def discretize(self, x, t):
         """DDPM discretization used by the reverse-diffusion predictor."""
@@ -95,6 +101,11 @@ class subVPSDE:
     def prior_sampling(self, rng, shape):
         """Sample from p_T ≈ N(0, I)."""
         return jax.random.normal(rng, shape)
+    
+    def prior_logp(self, x):
+        logprob = jsp.stats.norm.logpdf(x)
+        axes = tuple(range(1,x.ndim))
+        return jnp.sum(logprob, axis=axes)
 
     def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
@@ -135,6 +146,11 @@ class VESDE:
     def prior_sampling(self, rng, shape):
         """Sample from p_T ≈ N(0, σ_max² I)."""
         return jax.random.normal(rng, shape) * self.sigma_max
+
+    def prior_logp(self, x):
+        logprob = jsp.stats.norm.logpdf(x, scale=self.sigma_max)
+        axes = tuple(range(1,x.ndim))
+        return jnp.sum(logprob, axis=axes)
 
     def discretize(self, x, t):
         """SMLD discretization used by the reverse-diffusion predictor."""
