@@ -22,7 +22,7 @@ def train(config):
 
     # SDE
 
-    sde = get_sde(config)
+    sde, _ = get_sde(config)
 
     # Model
     model = UNet(config=config)

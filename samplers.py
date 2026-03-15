@@ -9,8 +9,7 @@ from model_utils import get_score_fn
 from utils import batch_mul
 from datasets import get_data_inverse_scaler
 
-def get_sampler(sde, model, params, config):
-    score_fn = get_score_fn(sde, model, params, continuous=config.training.continuous)
+def get_sampler(sde, score_fn, config):
     shape = (
         config.training.batch_size, 
         config.data.image_size, 
