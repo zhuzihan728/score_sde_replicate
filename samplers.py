@@ -5,7 +5,7 @@ from scipy import integrate
 import numpy as np
 
 from sde import VPSDE, subVPSDE, VESDE
-from model_utils import get_score_fn
+from score import get_score_fn
 from utils import batch_mul
 from datasets import get_data_inverse_scaler
 
@@ -87,9 +87,14 @@ class ReverseDiffusionPredictor(Predictor):
         super().__init__(sde, score_fn, probability_flow)
 
     def update_fn(self, rng, x, t):
-        f, G = self.sde.reverse_sde(x, t, self.score_fn(x,t), self.probability_flow)
+        #   Discretize the reverse SDE
+        #   rev_f = f − G²·score        
+        #   x_mean = x − rev_f,  x = x_mean + G·z
+        f, G = self.sde.discretize(x, t)
+        score = self.score_fn(x, t)
+        rev_f = f - batch_mul(G ** 2, score)
         z = jax.random.normal(rng, x.shape)
-        x_mean = x - f
+        x_mean = x - rev_f
         x = x_mean + batch_mul(G, z)
         return x, x_mean
     
@@ -98,7 +103,7 @@ class AncestralSamplingPredictor(Predictor):
         super().__init__(sde, score_fn, probability_flow)
 
     def vpsde_update(self, rng, x, t):
-        timestep = (t * (self.sde.N - 1) / self.sde.T).astype(jnp.int32)
+        timestep = self.sde.t_to_idx(t)
         beta = self.sde.discrete_betas[timestep]
         z = jax.random.normal(rng, x.shape)
         x_mean = batch_mul(x+batch_mul(beta, self.score_fn(x,t)), 1./jnp.sqrt(1-beta))
@@ -106,7 +111,7 @@ class AncestralSamplingPredictor(Predictor):
         return x, x_mean
     
     def vesde_update(self, rng, x, t):
-        timestep = (t * (self.sde.N - 1) / self.sde.T).astype(jnp.int32)
+        timestep = self.sde.t_to_idx(t)
         sigma = self.sde.discrete_sigmas[timestep]
         safe_idx = jnp.maximum(0, timestep-1)
         sigma_prev = jnp.where(timestep>0,self.sde.discrete_sigmas[safe_idx], 0.0)
@@ -127,8 +132,7 @@ class LangevinCorrector(Corrector):
 
     def update_fn(self, rng, x, t):
         if isinstance(self.sde, VPSDE):
-            timestep = (t * (self.sde.N - 1) / self.sde.T).astype(jnp.int32)
-            alpha = self.sde.alphas[timestep]
+            alpha = self.sde.alphas[self.sde.t_to_idx(t)]
         else:
             alpha = jnp.ones_like(t)
 
@@ -157,20 +161,19 @@ class AnnealedLangevinCorrector(Corrector):
 
     def update_fn(self, rng, x, t):
         if isinstance(self.sde, VPSDE) or isinstance(self.sde, subVPSDE):
-            timestep = (t * (self.sde.N - 1) / self.sde.T).astype(jnp.int32)
-            alpha = self.sde.alphas[timestep]
+            alpha = self.sde.alphas[self.sde.t_to_idx(t)]
         else:
             alpha = jnp.ones_like(t)
 
         alpha = alpha.reshape((alpha.shape[0],1,1,1))
         _, std = self.sde.marginal_prob(x, t)
+        step_size = batch_mul((self.snr * std) ** 2 * 2, alpha)
 
         def iteration(step, val):
             rng, x, x_mean = val
             score = self.score_fn(x, t)
             rng, step_rng = jax.random.split(rng)
             z = jax.random.normal(step_rng, x.shape)
-            step_size = (self.snr*std)**2*2*alpha
             x_mean = x + step_size* score
             x = x_mean + jnp.sqrt(2*step_size)*z
             return rng, x, x_mean
@@ -225,7 +228,7 @@ def ode_sampler(
     
     def sampler(rng, z=None):
         rng, step_rng = jax.random.split(rng)
-        x = z if z else sde.prior_sampling(step_rng, shape)
+        x = z if z is not None else sde.prior_sampling(step_rng, shape)
 
         def ode_fn(t,x_flat):
             x_reshaped = x_flat.reshape(shape)

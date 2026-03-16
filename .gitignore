@@ -54,7 +54,7 @@ experiments/
 
 # Init script
 init.sh
-
+slurm/
 # Log and output files
 *.log
 *.out

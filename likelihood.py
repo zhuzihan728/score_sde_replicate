@@ -41,8 +41,14 @@ def get_likelihood_fn(
         log_likelihood = prior_logp+delta_logp
 
         n_dims = jnp.prod(jnp.array(shape[1:]))
-        # Likelihood in bits/dimension
+        # Likelihood in bits/dimension (model space, i.e. data scaled to [-1,1])
         bpd = -(log_likelihood/jnp.log(2.0))/n_dims
+        # Correct from model space [-1,1] to pixel space [0,255]:
+        # inverse_scaler maps [-1,1]→[0,1], so its gradient is 0.5;
+        # log2(0.5) = -1, plus 8 bits for the [0,255] range → offset = -1+8 = 7.
+        offset = jnp.log2(jax.grad(inverse_scaler)(0.)) + 8.
+        bpd += offset
+
         # z = x(T): Uniquely Identifiable Representation (see paper, Section 4.3)
         return log_likelihood, bpd, z, nfe
     
