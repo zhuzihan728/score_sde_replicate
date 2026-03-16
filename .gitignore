@@ -43,14 +43,15 @@ env/
 
 # Environment
 envs/*
-!/envs/README.SCORE_SDE.activate
 
 # Experiments
 experiments/
 
 # Score SDE source code (but keep the clone script)
 /score_sde/**
-!/score_sde/git_clone_official_code
+!envs/README.MLMI4.activate
+!envs/setup_mlmi4_env.sh
+!envs/requirements-hpc.txt
 
 # Init script
 init.sh
@@ -58,3 +59,4 @@ slurm/
 # Log and output files
 *.log
 *.out
+runs/
