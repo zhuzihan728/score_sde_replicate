@@ -43,9 +43,11 @@ def get_dataset(config):
 
     def preprocess_celeba(example):
         image = tf.cast(example['image'], tf.float32) / 255.0
-        # Center crop: CelebA faces are roughly centered
-        # Original is 178x218, crop to 140x140 square around the face
-        image = tf.image.crop_to_bounding_box(image, 40, 15, 140, 140)
+        # central_crop(img, 140)
+        crop_size = 140
+        top = (image.shape[0] - crop_size) // 2
+        left = (image.shape[1] - crop_size) // 2
+        image = tf.image.crop_to_bounding_box(image, top, left, crop_size, crop_size)
         # Resize to target resolution
         image = tf.image.resize(image, [image_size, image_size], 
                                 method='bilinear', antialias=True)

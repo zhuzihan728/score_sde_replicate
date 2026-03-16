@@ -34,6 +34,11 @@ class VPSDE:
         self.N = N
         self.T = 1.0
         self.discrete_betas = jnp.linspace(beta_min / N, beta_max / N, N)
+        if float(self.discrete_betas.max()) >= 1.0:
+            raise ValueError(
+                f"VPSDE: discrete_betas exceed 1 (max={float(self.discrete_betas.max()):.4f}). "
+                f"Reduce beta_max or increase N (need beta_max/N < 1, got {beta_max}/{N})."
+            )
         self.alphas = 1.0 - self.discrete_betas
         self.alphas_cumprod = jnp.cumprod(self.alphas)
 
@@ -44,7 +49,7 @@ class VPSDE:
         log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
         mean = batch_mul(jnp.exp(log_mean_coeff), x)
         std = jnp.sqrt(1.0 - jnp.exp(2.0 * log_mean_coeff))
-        return mean, std[:, None, None, None]
+        return mean, std
 
     def sde(self, x, t):
         """Drift f and diffusion g of dx = f dt + g dW."""
@@ -58,15 +63,18 @@ class VPSDE:
     def prior_sampling(self, rng, shape):
         """Sample from p_T ≈ N(0, I)."""
         return jax.random.normal(rng, shape)
-    
+
     def prior_logp(self, x):
         logprob = jsp.stats.norm.logpdf(x)
         axes = tuple(range(1,x.ndim))
         return jnp.sum(logprob, axis=axes)
 
+    def t_to_idx(self, t):
+        return (t * (self.N - 1) / self.T).astype(jnp.int32)
+
     def discretize(self, x, t):
         """DDPM discretization used by the reverse-diffusion predictor."""
-        timestep = (t * (self.N - 1) / self.T).astype(jnp.int32)
+        timestep = self.t_to_idx(t)
         beta = self.discrete_betas[timestep]
         alpha = self.alphas[timestep]
         f = batch_mul(jnp.sqrt(alpha), x) - x
@@ -97,7 +105,7 @@ class subVPSDE:
         log_mean_coeff = -0.25 * t ** 2 * (self.beta_1 - self.beta_0) - 0.5 * t * self.beta_0
         mean = batch_mul(jnp.exp(log_mean_coeff), x)
         std = 1.0 - jnp.exp(2.0 * log_mean_coeff)
-        return mean, std[:, None, None, None]
+        return mean, std
 
     def sde(self, x, t):
         """Drift f and diffusion g of dx = f dt + g dW."""
@@ -117,6 +125,9 @@ class subVPSDE:
         logprob = jsp.stats.norm.logpdf(x)
         axes = tuple(range(1,x.ndim))
         return jnp.sum(logprob, axis=axes)
+
+    def t_to_idx(self, t):
+        return (t * (self.N - 1) / self.T).astype(jnp.int32)
 
     def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
@@ -143,7 +154,7 @@ class VESDE:
     def marginal_prob(self, x, t):
         """p_t(x_t | x_0): mean = x_0, std = σ(t)."""
         std = self.sigma_min * (self.sigma_max / self.sigma_min) ** t
-        return x, std[:, None, None, None]
+        return x, std
 
     def sde(self, x, t):
         """Drift f and diffusion g of the forward SDE dx = f dt + g dW."""
@@ -163,9 +174,12 @@ class VESDE:
         axes = tuple(range(1,x.ndim))
         return jnp.sum(logprob, axis=axes)
 
+    def t_to_idx(self, t):
+        return (t * (self.N - 1) / self.T).astype(jnp.int32)
+
     def discretize(self, x, t):
         """SMLD discretization used by the reverse-diffusion predictor."""
-        timestep = (t * (self.N - 1) / self.T).astype(jnp.int32)
+        timestep = self.t_to_idx(t)
         sigma = self.discrete_sigmas[timestep]
         adj = jnp.where(timestep == 0, jnp.zeros_like(sigma), self.discrete_sigmas[timestep - 1])
         return jnp.zeros_like(x), jnp.sqrt(sigma ** 2 - adj ** 2)

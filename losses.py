@@ -1,54 +1,33 @@
 import jax
 import jax.numpy as jnp
+from score import get_score_fn
+from utils import batch_mul
 
 
-def get_loss_fn(sde, model, train, reduce_mean=False,  continuous=False):
+def get_loss_fn(sde, model, train, reduce_mean=False, continuous=True):
 
     def loss_fn(rng, params, batch):
-        """Compute one training loss.
-        
-        Args:
-            rng: JAX random key
-            params: Model parameters
-            batch: Clean images, shape [B, H, W, C], already scaled to [-1,1]
-        
-        Returns:
-            loss: Scalar loss value
-        """
-        # Step 1: Sample random times
         rng, step_rng = jax.random.split(rng)
         if continuous:
-            t = jax.random.uniform(step_rng, (batch.shape[0],),
-                                   minval=1e-5, maxval=1.0)
+            t = jax.random.uniform(step_rng, (batch.shape[0],), minval=1e-5, maxval=1.0)
         else:
+            # sample t from {1/N, 2/N, ..., 1}, n time steps.
             t = jax.random.randint(step_rng, (batch.shape[0],),
-                                   minval=0, maxval=sde.N)
-            t = t.astype(jnp.float32)  # Flax layers expect float input
-        # Step 2: Sample noise
+                                   minval=1, maxval=sde.N + 1).astype(jnp.float32) / sde.N
+
         rng, step_rng = jax.random.split(rng)
         z = jax.random.normal(step_rng, batch.shape)
 
-        # Step 3: Perturb the images
+        # not exact for discrete time steps
         mean, std = sde.marginal_prob(batch, t)
-        perturbed = mean + std * z
+        perturbed = mean + batch_mul(std, z)
 
-        # Step 4: Model predicts the score
-        score = model.apply(params, perturbed, t, train=train)
+        score = get_score_fn(sde, model, params, train=train, continuous=continuous)(perturbed, t)
 
-        # Step 5: Compute the loss
-        # If model is perfect: score = -z / std
-        # So: score * std + z = 0
-        losses = jnp.square(score * std + z)
-
-        # Reduce over pixels (H, W, C)
-        losses = losses.reshape(losses.shape[0], -1)  # [B, H*W*C]
-        if reduce_mean:
-            losses = jnp.mean(losses, axis=-1)  # Average over pixels
-        else:
-            losses = jnp.sum(losses, axis=-1)   # Sum over pixels
-
-        # Average over batch
-        loss = jnp.mean(losses)
-        return loss
+        # score = -z / std
+        losses = jnp.square(batch_mul(std, score) + z)
+        losses = losses.reshape(losses.shape[0], -1)
+        losses = jnp.mean(losses, axis=-1) if reduce_mean else jnp.sum(losses, axis=-1)
+        return jnp.mean(losses)
 
     return loss_fn

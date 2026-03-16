@@ -17,10 +17,11 @@ class GaussianFourierFeatures(nn.Module):
     def __call__(self, t):
         # Random frequencies (fixed, not learned)
         # self.make_rng would also work, but we want deterministic init
-        W = self.param('W', 
+        W = self.param('W',
                        nn.initializers.normal(stddev=self.scale),
                        (self.embed_dim,))
-        
+        W = jax.lax.stop_gradient(W)
+
         # Project t onto these frequencies
         # t shape: [B] -> [B, 1] for broadcasting
         t_proj = t[:, None] * W[None, :] * 2 * jnp.pi
@@ -270,7 +271,7 @@ class UNet(nn.Module):
     config: ml_collections.ConfigDict
 
     @nn.compact
-    def __call__(self, x, t, train=False):
+    def __call__(self, x, time_cond, train=False):
         config = self.config
         nf = config.model.nf
         ch_mult = config.model.ch_mult
@@ -294,21 +295,19 @@ class UNet(nn.Module):
                 return ResnetBlock(out_channels=out_ch, dropout=dropout,
                                   skip_rescale=skip_rescale)
 
-        # TIME EMBEDDING
-        continuous = config.training.continuous
-        if continuous:
-            temb = GaussianFourierFeatures(embed_dim=nf)(t)
+        embedding_type = getattr(config.model, 'embedding_type', 'positional')
+        if config.training.continuous and embedding_type == 'fourier':
+            temb = GaussianFourierFeatures(embed_dim=nf)(time_cond)
         else:
-            temb = SinusoidalPosEmb(embed_dim=nf * 2)(t)
+            temb = SinusoidalPosEmb(embed_dim=nf * 2)(time_cond)
         temb = nn.Dense(nf * 4)(temb)
         temb = nn.swish(temb)
         temb = nn.Dense(nf * 4)(temb)
 
-        # ENCODER 
+        # ENCODER
         h = nn.Conv(nf, kernel_size=(3, 3), padding='SAME')(x)
         skips = [h]
 
-        # Track input for progressive input
         if progressive_input == 'residual':
             input_pyramid = x
 
@@ -322,22 +321,25 @@ class UNet(nn.Module):
                 skips.append(h)
 
             if i_level != num_resolutions - 1:
-                h = Downsample(out_ch, fir=fir)(h)
+                # BigGAN downsamples inside ResBlock; ddpm uses separate module
+                if resblock_type == 'biggan':
+                    h = ResBlock(out_ch, down=True)(h, temb, train=train)
+                else:
+                    h = Downsample(out_ch, fir=fir)(h)
                 skips.append(h)
 
-                # Progressive input: combine downsampled input at each level
                 if progressive_input == 'residual':
                     input_pyramid = _downsample_fir(input_pyramid, _fir_kernel()) if fir else input_pyramid[:, ::2, ::2, :]
                     input_proj = nn.Conv(out_ch, kernel_size=(1, 1))(input_pyramid)
                     h = (h + input_proj) / jnp.sqrt(2.0) if skip_rescale else h + input_proj
 
-        # MIDDLE 
+        # MIDDLE
         mid_ch = nf * ch_mult[-1]
         h = ResBlock(mid_ch)(h, temb, train=train)
         h = AttnBlock()(h)
         h = ResBlock(mid_ch)(h, temb, train=train)
 
-        # DECODER 
+        # DECODER
         for i_level in reversed(range(num_resolutions)):
             out_ch = nf * ch_mult[i_level]
 
@@ -345,11 +347,17 @@ class UNet(nn.Module):
                 skip = skips.pop()
                 h = jnp.concatenate([h, skip], axis=-1)
                 h = ResBlock(out_ch)(h, temb, train=train)
-                if h.shape[1] in attn_resolutions:
-                    h = AttnBlock()(h)
+
+            # attention once per level, outside the block loop
+            if h.shape[1] in attn_resolutions:
+                h = AttnBlock()(h)
 
             if i_level != 0:
-                h = Upsample(out_ch, fir=fir)(h)
+                # BigGAN upsamples inside ResBlock; ddpm uses separate module
+                if resblock_type == 'biggan':
+                    h = ResBlock(out_ch, up=True)(h, temb, train=train)
+                else:
+                    h = Upsample(out_ch, fir=fir)(h)
 
         # OUTPUT
         assert not skips

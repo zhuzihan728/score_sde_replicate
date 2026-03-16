@@ -38,11 +38,15 @@ def train(config):
     ema_params = params
 
     # Optimizer: Adam with warmup
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=config.training.learning_rate,
-        warmup_steps=config.training.warmup,
-        decay_steps=config.training.n_iters
+    # linear warmup then constant LR
+    warmup = config.training.warmup
+    lr = config.training.learning_rate
+    schedule = optax.join_schedules(
+        schedules=[
+            optax.linear_schedule(init_value=0.0, end_value=lr, transition_steps=warmup),
+            optax.constant_schedule(lr),
+        ],
+        boundaries=[warmup]
     )
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.training.grad_clip),
