@@ -256,6 +256,7 @@ class Downsample(nn.Module):
 class Upsample(nn.Module):
     out_channels: int
     fir: bool = False
+    method: str = 'nearest'
 
     @nn.compact
     def __call__(self, x):
@@ -263,7 +264,7 @@ class Upsample(nn.Module):
         if self.fir:
             x = _upsample_fir(x, _fir_kernel())
         else:
-            x = jax.image.resize(x, shape=(B, H * 2, W * 2, C), method='nearest')
+            x = jax.image.resize(x, shape=(B, H * 2, W * 2, C), method=self.method)
         return nn.Conv(self.out_channels, kernel_size=(3, 3), padding='SAME')(x)
 
 class UNet(nn.Module):
@@ -285,6 +286,7 @@ class UNet(nn.Module):
         skip_rescale = getattr(config.model, 'skip_rescale', False)
         resblock_type = getattr(config.model, 'resblock_type', 'ddpm')
         progressive_input = getattr(config.model, 'progressive_input', 'none')
+        upsample_method = getattr(config.model, 'upsample_method', 'nearest')
 
         # Select residual block type
         def ResBlock(out_ch, **kwargs):
@@ -357,7 +359,7 @@ class UNet(nn.Module):
                 if resblock_type == 'biggan':
                     h = ResBlock(out_ch, up=True)(h, temb, train=train)
                 else:
-                    h = Upsample(out_ch, fir=fir)(h)
+                    h = Upsample(out_ch, fir=fir, method=upsample_method)(h)
 
         # OUTPUT
         assert not skips

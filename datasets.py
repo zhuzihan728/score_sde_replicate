@@ -83,7 +83,7 @@ def get_dataset(config):
         train_split = 'train'
         eval_split = 'test'
 
-    elif dataset_name.lower() == 'celeb_a':
+    elif dataset_name.lower() in ('celeb_a', 'celeba'):
         ds_builder = tfds.builder('celeb_a')
         preprocess = preprocess_celeba
         train_split = 'train'
