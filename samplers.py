@@ -10,8 +10,11 @@ from utils import batch_mul
 from datasets import get_data_inverse_scaler
 
 def get_sampler(sde, score_fn, config):
+    num_devices = jax.local_device_count()
+    local_batch_size = config.training.batch_size// num_devices
+    
     shape = (
-        config.training.batch_size, 
+        local_batch_size, 
         config.data.image_size, 
         config.data.image_size, 
         config.data.num_channels
@@ -145,9 +148,9 @@ class LangevinCorrector(Corrector):
             rng, step_rng = jax.random.split(rng)
             z = jax.random.normal(step_rng, x.shape)
             score_norm = jnp.linalg.norm(score.reshape((score.shape[0], -1)), axis=-1).mean()
-            # score_norm = jax.lax.pmean(score_norm, axis_name='batch')
+            score_norm = jax.lax.pmean(score_norm, axis_name='batch')
             noise_norm = jnp.linalg.norm(z.reshape((z.shape[0],-1)), axis=-1).mean()
-            # noise_norm = jax.lax.pmean(noise_norm, axis_name='batch')
+            noise_norm = jax.lax.pmean(noise_norm, axis_name='batch')
             step_size = (self.snr*noise_norm/score_norm)**2*2*alpha
             x_mean = x + step_size*score
             x = x_mean + jnp.sqrt(2*step_size)* z
@@ -209,45 +212,54 @@ def pc_sampler(
         _, x, x_mean = jax.lax.fori_loop(0, sde.N, iteration, (rng, x, x))
         return (inverse_scaler(x_mean) if denoise else x), sde.N*(n_steps+1)
 
-    return jax.jit(sampler_batch)
+    return jax.pmap(sampler_batch, axis_name='batch')
 
 def ode_sampler(
         sde, score_fn, shape, inverse_scaler, denoise=False, 
         rtol=1e-5, atol=1e-5, method='RK45', eps=1e-3    
     ):
+    num_devices = jax.local_device_count()
+    multi_device_shape = (num_devices,)+shape
 
-    @jax.jit
+    @jax.pmap
     def denoise_update_fn(rng, x):
         predictor = ReverseDiffusionPredictor(sde, score_fn, probability_flow=False)
         vec_e = jnp.full((x.shape[0],), eps)
         _, x = predictor.update_fn(rng, x, vec_e)
         return x
     
-    @jax.jit
+    @jax.pmap
     def drift_fn(x,t):
         f, _ = sde.reverse_sde(x,t, score_fn(x,t), probability_flow=True)
         return f
     
     def sampler(rng, z=None):
-        rng, step_rng = jax.random.split(rng)
-        x = z if z is not None else sde.prior_sampling(step_rng, shape)
+        if z:
+            x = z
+        else:
+            rng, step_rng = jax.random.split(rng)
+            global_shape = (num_devices*shape[0],)+shape[1:]
+            x = sde.prior_sampling(step_rng, global_shape)
+            x = x.reshape(multi_device_shape)
 
         def ode_fn(t,x_flat):
-            x_reshaped = x_flat.reshape(shape)
-            vec_t = jnp.full((x_reshaped.shape[0],), t)
+            x_reshaped = x_flat.reshape(multi_device_shape)
+            vec_t = jnp.full((x_reshaped.shape[0],x_reshaped.shape[1]), t)
             drift = drift_fn(x_reshaped, vec_t)
-            return jnp.ravel(drift)
+            return jnp.array(drift).reshape(-1)
             
-        x_flat = jnp.ravel(x)    
-        solution = integrate.solve_ivp(ode_fn, (sde.T, eps), x_flat, rtol=rtol, atol=atol, method=method)
+        x_flat = jnp.array(x).reshape(-1)    
+        solution = integrate.solve_ivp(
+            ode_fn, (sde.T, eps), x_flat, rtol=rtol, atol=atol, method=method
+        )
 
         nfe = solution.nfev
-        x = jnp.asarray(solution.y[:,-1]).reshape(shape)
+        x = jnp.asarray(solution.y[:,-1]).reshape(multi_device_shape)
 
         if denoise:
-            rng, step_rng = jax.random.split(rng)
-            step_rng = jnp.asarray(step_rng)
-            x = denoise_update_fn(step_rng, x)
+            rng, *step_rngs = jax.random.split(rng, num_devices+1)
+            step_rngs = jnp.stack(step_rngs)
+            x = denoise_update_fn(step_rngs, x)
 
         x = inverse_scaler(x)
         return x, nfe

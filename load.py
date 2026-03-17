@@ -48,7 +48,8 @@ def load_model_from_checkpoint(
         model: str = 'ddpm',
         dataset: str = 'cifar10',
         sde_type: str = 'vpsde',
-        interpolation: str = 'linear'
+        interpolation: str = 'linear',
+        cont: bool = False
     ):
     c = select_config(model, dataset, sde_type)
 
@@ -71,16 +72,18 @@ def load_model_from_checkpoint(
         rng=rng
     )
 
-    scaler = datasets.get_data_inverse_scaler(c.data.centered)    
+    scaler = datasets.get_data_scaler(c.data.centered)
+    inverse_scaler = datasets.get_data_inverse_scaler(c.data.centered)    
     state = load_training_state(checkpoint, state)
     fixed_params = convert_params(state.params_ema)
+    cont = cont if cont else c.training.continuous
     score_func = mutils.get_score_fn(
         sde_old, 
         score_model,
         fixed_params, 
         state.model_state, 
         train=False, 
-        continuous=c.training.continuous
+        continuous=cont
     )
 
     def score_fn(x,t):
@@ -91,4 +94,4 @@ def load_model_from_checkpoint(
         else:
             return score_func(x,t,rng)
     
-    return sde, score_fn, scaler, c, sampling_eps
+    return sde, score_fn, scaler, inverse_scaler, c, sampling_eps

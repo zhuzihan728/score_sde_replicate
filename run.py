@@ -69,9 +69,13 @@ args = parser.parse_args()
 rng = jax.random.PRNGKey(args.random_key)
 
 print(f'Loading Model from {args.checkpoint}')
-sde, score_fn, scaler, config, _ = load_model_from_checkpoint(
-    args.checkpoint, args.model, args.dataset, args.sde, args.interpolation
+cont = True if args.experiment_type == 'likelihood' else False
+sde, score_fn, scaler, inverse_scaler, config, _ = load_model_from_checkpoint(
+    args.checkpoint, args.model, args.dataset, args.sde, args.interpolation, cont
 )
+
+num_devices = jax.local_device_count()
+print(f'JAX has access to {num_devices} GPU(s)')
 
 if args.experiment_type == 'generation':
     config.sampler.type = args.sampler
@@ -89,8 +93,15 @@ if args.experiment_type == 'generation':
     print('\nGeneration')
     for i in range(args.num_gen_batches):
         print(f"Batch {i+1}/{args.num_gen_batches}")
-        rng, step_rng = jax.random.split(rng)
-        gen, _ = sampler_fn(step_rng)
+        if args.sampler == 'pc':
+            rng, *step_rngs = jax.random.split(rng, num_devices+1)
+            step_rngs = jnp.stack(step_rngs)
+            gen, _ = sampler_fn(step_rngs)
+        else:
+            rng, step_rng = jax.random.split(rng)
+            gen, _ = sampler_fn(step_rng)
+
+        gen = gen.reshape((-1,)+gen.shape[2:])
         gen = jnp.clip(gen*255, 0, 255).astype(jnp.uint8)
         gen_img.append(gen)
 
@@ -123,7 +134,7 @@ if args.experiment_type == 'generation':
     print(f'\nGenerated images, FID and IS features saved to {save_path}')
 
 else: # Likelihood Computation
-    likelihood_fn = get_likelihood_fn(sde, score_fn, scaler, args.hutchinson)
+    likelihood_fn = get_likelihood_fn(sde, score_fn, inverse_scaler, args.hutchinson, eps=1e-3)
     print(f'Loading {args.dataset} data')
     _, eval_ds = get_dataset(config)
     eval_iter = eval_ds.as_numpy_iterator()

@@ -11,7 +11,7 @@ def get_config():
     data.image_size = 32
     data.num_channels = 3
     data.centered = True
-    data.random_flip = True
+    data.random_flip = False
     data.uniform_dequantization = False
 
     # Model 

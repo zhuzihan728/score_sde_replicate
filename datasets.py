@@ -35,10 +35,14 @@ def get_dataset(config):
 
     def preprocess_cifar10(example):
         image = tf.cast(example['image'], tf.float32) / 255.0
+        if config.data.uniform_dequantization:
+            image = (image+tf.random.uniform(image.shape))/256.0
+        else:
+            image = image / 255.0
+
         if config.data.random_flip:
             image = tf.image.random_flip_left_right(image)
-        if config.data.uniform_dequantization:
-            image = image + tf.random.uniform(image.shape) / 256.0
+
         return image
 
     def preprocess_celeba(example):
