@@ -13,12 +13,13 @@ def convert_params(params):
         params = params.unfreeze()
 
     def convert(d):
+        is_norm_layer = 'scale' in d
         for k, v in d.items():
-            if isinstance(v, dict):
+            if isinstance(v, dict) or isinstance(v, flax.core.FrozenDict):
                 convert(v)
             elif k in ['scale', 'bias'] and hasattr(v, 'ndim'):
-                if v.ndim == 4 and v.shape[:3] == (1,1,1):
-                    d[k] = jnp.squeeze(v)
+                if v.ndim == 1 and is_norm_layer:
+                    d[k] = jnp.reshape(v, (1,1,1,-1))
 
     convert(params)
     return flax.core.freeze(params)

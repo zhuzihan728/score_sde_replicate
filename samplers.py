@@ -21,11 +21,11 @@ def get_sampler(sde, score_fn, config):
     if config.sampler.type == 'PC':
         # get predictor
         if config.sampler.predictor == 'Euler-Maruyama':
-            predictor = EulerMaruyamaPredictor(sde, score_fn, False)
+            predictor = EulerMaruyamaPredictor(sde, score_fn, False, config.sampler_steps)
         elif config.sampler.predictor == 'ReverseDiffusion':
-            predictor = ReverseDiffusionPredictor(sde, score_fn, False)
+            predictor = ReverseDiffusionPredictor(sde, score_fn, False, config.sampler_steps)
         elif config.sampler.predictor == 'AncestralSampling':
-            predictor = AncestralSamplingPredictor(sde, score_fn, False)
+            predictor = AncestralSamplingPredictor(sde, score_fn, False, config.sampler_steps)
         else:
             predictor = Predictor()
         # get corrector
@@ -51,10 +51,11 @@ def get_sampler(sde, score_fn, config):
         )
 
 class Predictor:
-    def __init__(self, sde=None, score_fn=None, probability_flow=False):
+    def __init__(self, sde=None, score_fn=None, probability_flow=False, n_steps=1_000):
         self.sde = sde
         self.score_fn = score_fn
         self.probability_flow = probability_flow
+        self.n_steps = n_steps
 
     def update_fn(self, rng, x, t):
         return x, x
@@ -70,12 +71,12 @@ class Corrector:
         return x, x
 
 class EulerMaruyamaPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def update_fn(self, rng, x, t):
         eps=1e-5
-        dt = (1. - eps)/ self.sde.N
+        dt = (1. - eps)/ self.n_steps
         z = jax.random.normal(rng, x.shape)
         f, G = self.sde.reverse_sde(x, t, self.score_fn(x,t), self.probability_flow)
         x_mean = x - f*dt
@@ -83,8 +84,8 @@ class EulerMaruyamaPredictor(Predictor):
         return x, x_mean
     
 class ReverseDiffusionPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def update_fn(self, rng, x, t):
         #   Discretize the reverse SDE
@@ -99,8 +100,8 @@ class ReverseDiffusionPredictor(Predictor):
         return x, x_mean
     
 class AncestralSamplingPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def vpsde_update(self, rng, x, t):
         timestep = self.sde.t_to_idx(t)
@@ -200,8 +201,9 @@ def pc_sampler(
             vec_t = jnp.full((shape[0],), t)
             rng, step_rng = jax.random.split(rng)
             x, x_mean = corrector.update_fn(step_rng, x, vec_t)
-            rng, step_rng = jax.random.split(rng)
-            x, x_mean = predictor.update_fn(step_rng, x, vec_t)
+            if isinstance(predictor, EulerMaruyamaPredictor) or isinstance(predictor, ReverseDiffusionPredictor) or isinstance(predictor, AncestralSamplingPredictor):
+                rng, step_rng = jax.random.split(rng)
+                x, x_mean = predictor.update_fn(step_rng, x, vec_t)
             return rng, x, x_mean
         
         _, x, x_mean = jax.lax.fori_loop(0, sde.N, iteration, (rng, x, x))

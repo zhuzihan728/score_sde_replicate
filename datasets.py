@@ -114,7 +114,7 @@ def get_dataset(config):
     eval_ds = (eval_ds
                .map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
                .batch(batch_size, drop_remainder=True)
-               .repeat()
+            #    .repeat()
                .prefetch(tf.data.AUTOTUNE))
 
     return train_ds, eval_ds

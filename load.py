@@ -47,7 +47,8 @@ def load_model_from_checkpoint(
         checkpoint: str,
         model: str = 'ddpm',
         dataset: str = 'cifar10',
-        sde_type: str = 'vpsde'
+        sde_type: str = 'vpsde',
+        interpolation: str = 'linear'
     ):
     c = select_config(model, dataset, sde_type)
 
@@ -83,6 +84,11 @@ def load_model_from_checkpoint(
     )
 
     def score_fn(x,t):
-       return score_func(x,t,rng)
+        if interpolation == 'rounding':
+            steps = sde.N-1
+            t_round = jnp.round(t*steps)/steps
+            return score_func(x, t_round, rng)
+        else:
+            return score_func(x,t,rng)
     
     return sde, score_fn, scaler, c, sampling_eps
