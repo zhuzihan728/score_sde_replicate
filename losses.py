@@ -18,11 +18,14 @@ def get_loss_fn(sde, model, train, reduce_mean=False, continuous=True):
         rng, step_rng = jax.random.split(rng)
         z = jax.random.normal(step_rng, batch.shape)
 
+        rng, dropout_rng = jax.random.split(rng)
+
         # not exact for discrete time steps
         mean, std = sde.marginal_prob(batch, t)
         perturbed = mean + batch_mul(std, z)
 
-        score = get_score_fn(sde, model, params, train=train, continuous=continuous)(perturbed, t)
+        score = get_score_fn(sde, model, params, train=train, continuous=continuous,
+                             rng=dropout_rng)(perturbed, t)
 
         # score = -z / std
         losses = jnp.square(batch_mul(std, score) + z)
