@@ -42,7 +42,7 @@ def load_ckpt(ckpt_path, config):
     H, C = config.data.image_size, config.data.num_channels
     model = UNet(config=config)
     default_path = str(pathlib.Path(ckpt_path).resolve() / 'default')
-    checkpointer = ocp.PyTreeCheckpointer()
+    checkpointer = ocp.StandardCheckpointer()
     restored = checkpointer.restore(default_path)
     ema_params = jax.device_put(restored['ema_params'], jax.devices()[0])
     return model, ema_params
