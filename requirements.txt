@@ -5,6 +5,7 @@ optax
 flax
 orbax-checkpoint<0.11.0
 tensorflow
+tensorflow_hub
 ml_collections
 scipy
 matplotlib

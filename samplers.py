@@ -42,7 +42,7 @@ def get_sampler(sde, score_fn, config):
         
         return pc_sampler(
             sde, shape, predictor, corrector, inverse_scaler, 
-            config.sampler.sampler_steps, config.sampler.denoise
+            config.sampler.sampler_steps, config.sampler.denoise, config.sampler.eps
         )
     else: # ODE Sampler
         return ode_sampler(

@@ -5,8 +5,6 @@ import jax.scipy as jsp
 import numpy as np
 from utils import batch_mul
 
-import library.sde_lib as sde_lib
-
 def get_sde(config):
     N = config.training.sde_N
     if config.training.sde == 'vesde':
@@ -17,6 +15,7 @@ def get_sde(config):
         return subVPSDE(config.model.beta_min, config.model.beta_max, N), 1e-3
     
 def get_old_sde(config):
+    import library.sde_lib as sde_lib
     N = config.training.sde_N
     if config.training.sde == 'vesde':
         return sde_lib.VESDE(config.model.sigma_min, config.model.sigma_max, N)
