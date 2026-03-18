@@ -97,6 +97,8 @@ class subVPSDE:
         self.beta_1 = beta_max
         self.N = N
         self.T = 1.0
+        self.discrete_betas = jnp.linspace(beta_min / N, beta_max / N, N)
+        self.alphas = 1.0 - self.discrete_betas
 
     # ── Forward SDE ─────────────────────────────────────────────────────────
 
@@ -128,6 +130,15 @@ class subVPSDE:
 
     def t_to_idx(self, t):
         return (t * (self.N - 1) / self.T).astype(jnp.int32)
+
+    def discretize(self, x, t):
+        """DDPM discretization for reverse-diffusion predictor."""
+        timestep = self.t_to_idx(t)
+        beta = self.discrete_betas[timestep]
+        alpha = self.alphas[timestep]
+        f = batch_mul(jnp.sqrt(alpha), x) - x
+        G = jnp.sqrt(beta)
+        return f, G
 
     def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
