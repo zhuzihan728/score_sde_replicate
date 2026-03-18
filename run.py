@@ -53,7 +53,7 @@ parser.add_argument('--random_key', type=int, default=0)
 # Sampling Parameters
 parser.add_argument('--sampler', type=str, default='pc')
 parser.add_argument('--predictor', type=str, default='Euler-Maruyama')
-parser.add_argument('--corrector', type=str, default='Langevin')
+parser.add_argument('--corrector', type=str, default='AnnealedLangevin')
 parser.add_argument('--snr', type=float, default=0.1)
 parser.add_argument('--sampler_steps', type=int, default=1000)
 parser.add_argument('--interpolation', type=str, default='linear')
@@ -134,7 +134,7 @@ if args.experiment_type == 'generation':
     print(f'\nGenerated images, FID and IS features saved to {save_path}')
 
 else: # Likelihood Computation
-    likelihood_fn = get_likelihood_fn(sde, score_fn, inverse_scaler, args.hutchinson, eps=1e-3)
+    likelihood_fn = get_likelihood_fn(sde, score_fn, inverse_scaler, args.hutchinson, eps=1e-5)
     print(f'Loading {args.dataset} data')
     _, eval_ds = get_dataset(config)
     eval_iter = eval_ds.as_numpy_iterator()

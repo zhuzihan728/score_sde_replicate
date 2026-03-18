@@ -20,15 +20,17 @@ def get_sampler(sde, score_fn, config):
         config.data.num_channels
     )
     inverse_scaler = get_data_inverse_scaler(config.data.centered)
-
-    if config.sampler.type == 'PC':
+    steps = config.sampler.sampler_steps
+    if config.sampler.type == 'pc':
         # get predictor
         if config.sampler.predictor == 'Euler-Maruyama':
-            predictor = EulerMaruyamaPredictor(sde, score_fn, False, config.sampler_steps)
+            predictor = EulerMaruyamaPredictor(sde, score_fn, False, steps)
         elif config.sampler.predictor == 'ReverseDiffusion':
-            predictor = ReverseDiffusionPredictor(sde, score_fn, False, config.sampler_steps)
+            predictor = ReverseDiffusionPredictor(sde, score_fn, False, steps)
         elif config.sampler.predictor == 'AncestralSampling':
-            predictor = AncestralSamplingPredictor(sde, score_fn, False, config.sampler_steps)
+            predictor = AncestralSamplingPredictor(sde, score_fn, False, steps)
+        elif config.sampler.predictor == 'ProbabilityFlow':
+            predictor = ProbabilityFlowPredictor(sde, score_fn, False, steps)
         else:
             predictor = Predictor()
         # get corrector
@@ -110,7 +112,7 @@ class AncestralSamplingPredictor(Predictor):
         timestep = self.sde.t_to_idx(t)
         beta = self.sde.discrete_betas[timestep]
         z = jax.random.normal(rng, x.shape)
-        x_mean = batch_mul(x+batch_mul(beta, self.score_fn(x,t)), 1./jnp.sqrt(1-beta))
+        x_mean = batch_mul(1./jnp.sqrt(1-beta), x+batch_mul(beta, self.score_fn(x,t)))
         x = x_mean + batch_mul(jnp.sqrt(beta), z)
         return x, x_mean
     
@@ -129,6 +131,31 @@ class AncestralSamplingPredictor(Predictor):
             return self.vpsde_update(rng, x, t)
         return self.vesde_update(rng, x, t)
     
+class ProbabilityFlowPredictor(Predictor):
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
+
+    def vpsde_update(self,x,t):
+        timestep = self.sde.t_to_idx(t)
+        beta = self.sde.discrete_betas[timestep]
+        x_mean = batch_mul(2.-jnp.sqrt(1.-beta),x)+batch_mul(0.5*beta, self.score_fn(x,t))
+        x = x_mean
+        return x, x_mean
+    
+    def vesde_update(self, x, t):
+        timestep = self.sde.t_to_idx(t)
+        sigma = self.sde.discrete_sigmas[timestep]
+        safe_idx = jnp.maximum(0, timestep-1)
+        sigma_prev = jnp.where(timestep>0,self.sde.discrete_sigmas[safe_idx], 0.0)
+        x_mean = x + batch_mul(0.5*(sigma**2-sigma_prev**2), self.score_fn(x,t))
+        x = x_mean
+        return x, x_mean
+    
+    def update_fn(self, rng, x, t):
+        if isinstance(self.sde, VPSDE):
+            return self.vpsde_update(x, t)
+        return self.vesde_update(x, t)    
+
 # Note: Algorithms 4 and 5 in the paper actually correspond to vanilla Langevin dynamcs    
 class LangevinCorrector(Corrector):
     def __init__(self, sde, score_fn, snr, n_steps):
@@ -204,7 +231,7 @@ def pc_sampler(
             vec_t = jnp.full((shape[0],), t)
             rng, step_rng = jax.random.split(rng)
             x, x_mean = corrector.update_fn(step_rng, x, vec_t)
-            if isinstance(predictor, EulerMaruyamaPredictor) or isinstance(predictor, ReverseDiffusionPredictor) or isinstance(predictor, AncestralSamplingPredictor):
+            if isinstance(predictor, EulerMaruyamaPredictor) or isinstance(predictor, ReverseDiffusionPredictor) or isinstance(predictor, AncestralSamplingPredictor) or isinstance(predictor, ProbabilityFlowPredictor):
                 rng, step_rng = jax.random.split(rng)
                 x, x_mean = predictor.update_fn(step_rng, x, vec_t)
             return rng, x, x_mean

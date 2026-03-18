@@ -52,7 +52,7 @@ def load_model_from_checkpoint(
         cont: bool = False
     ):
     c = select_config(model, dataset, sde_type)
-
+    c.training.batch_size=1024
     sde, sampling_eps = get_sde(c)
     sde_old = get_old_sde(c)
 

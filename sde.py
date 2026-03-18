@@ -9,9 +9,9 @@ import library.sde_lib as sde_lib
 
 def get_sde(config):
     N = config.training.sde_N
+    if config.sampler.sampler_steps == 2000:
+        N = 2000
     if config.training.sde == 'vesde':
-        if config.sampler.sampler_steps == 2000:
-            N = 2000
         return VESDE(config.model.sigma_min, config.model.sigma_max, N), 1e-5
     elif config.training.sde == 'vpsde':
         factor = 2. if config.sampler.sampler_steps == 2000 else 1.
@@ -131,6 +131,13 @@ class subVPSDE:
 
     def t_to_idx(self, t):
         return (t * (self.N - 1) / self.T).astype(jnp.int32)
+
+    def discretize(self, x, t):
+        dt = 1.0 / self.N
+        drift,diffusion = self.sde(x,t)
+        f = drift*dt
+        G = diffusion*jnp.sqrt(dt)
+        return f, G
 
     def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""

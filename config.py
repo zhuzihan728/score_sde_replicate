@@ -12,7 +12,7 @@ def get_config():
     data.num_channels = 3
     data.centered = True
     data.random_flip = False
-    data.uniform_dequantization = False
+    data.uniform_dequantization = True
 
     # Model 
     config.model = model = ml_collections.ConfigDict()
@@ -178,7 +178,7 @@ def get_config_ddpm_cifar10(continuous=False, pp=False, deep=False, sde_type='vp
         config.model.name = 'ddpm'
         config.model.num_res_blocks = 2
 
-    config.model.ema_rate = 0.999
+    config.model.ema_rate = 0.9999
     config.model.nonlinearity = 'swish'
     config.model.normalization = 'GroupNorm'
     config.model.resamp_with_conv = True
@@ -214,7 +214,7 @@ def get_config_ncsnpp_cifar10(continuous=False, deep=False):
     config.training.sde = 'vesde'
     config.training.continuous = continuous
 
-    config.data.centered = True
+    config.data.centered = False
 
     return config
 
