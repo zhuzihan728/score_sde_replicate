@@ -114,7 +114,7 @@ def main():
     sampler = pc_sampler(sde, shape64,
                          build_predictor(pred_type, sde, score_fn),
                          build_corrector(corr_type, sde, score_fn, snr),
-                         inverse_scaler, denoise=True, eps=eps)
+                         inverse_scaler, denoise=True, epsilon=eps)
     rng, k = jax.random.split(rng)
     imgs, _ = sampler(k)
     save_grid(np.array(imgs), out_dir / 'grid.png', nrow=8)
