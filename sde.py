@@ -5,17 +5,21 @@ import jax.scipy as jsp
 import numpy as np
 from utils import batch_mul
 
+import library.sde_lib as sde_lib
+
 def get_sde(config):
     N = config.training.sde_N
+    if config.sampler.sampler_steps == 2000:
+        N = 2000
     if config.training.sde == 'vesde':
         return VESDE(config.model.sigma_min, config.model.sigma_max, N), 1e-5
     elif config.training.sde == 'vpsde':
-        return VPSDE(config.model.beta_min, config.model.beta_max, N), 1e-3
+        factor = 2. if config.sampler.sampler_steps == 2000 else 1.
+        return VPSDE(config.model.beta_min/factor, config.model.beta_max/factor, N), 1e-3
     else:
         return subVPSDE(config.model.beta_min, config.model.beta_max, N), 1e-3
     
 def get_old_sde(config):
-    import library.sde_lib as sde_lib
     N = config.training.sde_N
     if config.training.sde == 'vesde':
         return sde_lib.VESDE(config.model.sigma_min, config.model.sigma_max, N)
@@ -85,7 +89,7 @@ class VPSDE:
         f, g = self.sde(x, t)
         score_factor = 0.5 if probability_flow else 1
         rev_f = f - batch_mul(g ** 2, score*score_factor)
-        return rev_f, g
+        return rev_f, jnp.zeros_like(g) if probability_flow else g
 
 
 class subVPSDE:
@@ -128,12 +132,19 @@ class subVPSDE:
     def t_to_idx(self, t):
         return (t * (self.N - 1) / self.T).astype(jnp.int32)
 
+    def discretize(self, x, t):
+        dt = 1.0 / self.N
+        drift,diffusion = self.sde(x,t)
+        f = drift*dt
+        G = diffusion*jnp.sqrt(dt)
+        return f, G
+
     def reverse_sde(self, x, t, score, probability_flow=False):
         """Reverse-time SDE drift and diffusion given the score."""
         f, g = self.sde(x, t)
         score_factor = 0.5 if probability_flow else 1
         rev_f = f - batch_mul(g ** 2, score*score_factor)
-        return rev_f, g
+        return rev_f, jnp.zeros_like(g) if probability_flow else g
 
 
 class VESDE:
@@ -188,4 +199,4 @@ class VESDE:
         f, g = self.sde(x, t)
         score_factor = 0.5 if probability_flow else 1
         rev_f = f - batch_mul(g ** 2, score*score_factor)
-        return rev_f, g
+        return rev_f, jnp.zeros_like(g) if probability_flow else g

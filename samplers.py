@@ -10,22 +10,27 @@ from utils import batch_mul
 from datasets import get_data_inverse_scaler
 
 def get_sampler(sde, score_fn, config):
+    num_devices = jax.local_device_count()
+    local_batch_size = config.training.batch_size// num_devices
+    
     shape = (
-        config.training.batch_size, 
+        local_batch_size, 
         config.data.image_size, 
         config.data.image_size, 
         config.data.num_channels
     )
     inverse_scaler = get_data_inverse_scaler(config.data.centered)
-
-    if config.sampler.type == 'PC':
+    steps = config.sampler.sampler_steps
+    if config.sampler.type == 'pc':
         # get predictor
         if config.sampler.predictor == 'Euler-Maruyama':
-            predictor = EulerMaruyamaPredictor(sde, score_fn, False)
+            predictor = EulerMaruyamaPredictor(sde, score_fn, False, steps)
         elif config.sampler.predictor == 'ReverseDiffusion':
-            predictor = ReverseDiffusionPredictor(sde, score_fn, False)
+            predictor = ReverseDiffusionPredictor(sde, score_fn, False, steps)
         elif config.sampler.predictor == 'AncestralSampling':
-            predictor = AncestralSamplingPredictor(sde, score_fn, False)
+            predictor = AncestralSamplingPredictor(sde, score_fn, False, steps)
+        elif config.sampler.predictor == 'ProbabilityFlow':
+            predictor = ProbabilityFlowPredictor(sde, score_fn, False, steps)
         else:
             predictor = Predictor()
         # get corrector
@@ -42,7 +47,7 @@ def get_sampler(sde, score_fn, config):
         
         return pc_sampler(
             sde, shape, predictor, corrector, inverse_scaler, 
-            config.sampler.sampler_steps, config.sampler.denoise, config.sampler.eps
+            config.sampler.sampler_steps, config.sampler.denoise
         )
     else: # ODE Sampler
         return ode_sampler(
@@ -51,10 +56,11 @@ def get_sampler(sde, score_fn, config):
         )
 
 class Predictor:
-    def __init__(self, sde=None, score_fn=None, probability_flow=False):
+    def __init__(self, sde=None, score_fn=None, probability_flow=False, n_steps=1_000):
         self.sde = sde
         self.score_fn = score_fn
         self.probability_flow = probability_flow
+        self.n_steps = n_steps
 
     def update_fn(self, rng, x, t):
         return x, x
@@ -70,8 +76,8 @@ class Corrector:
         return x, x
 
 class EulerMaruyamaPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def update_fn(self, rng, x, t):
         eps=1e-5
@@ -83,8 +89,8 @@ class EulerMaruyamaPredictor(Predictor):
         return x, x_mean
     
 class ReverseDiffusionPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def update_fn(self, rng, x, t):
         #   Discretize the reverse SDE
@@ -99,14 +105,14 @@ class ReverseDiffusionPredictor(Predictor):
         return x, x_mean
     
 class AncestralSamplingPredictor(Predictor):
-    def __init__(self, sde, score_fn, probability_flow=False):
-        super().__init__(sde, score_fn, probability_flow)
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
 
     def vpsde_update(self, rng, x, t):
         timestep = self.sde.t_to_idx(t)
         beta = self.sde.discrete_betas[timestep]
         z = jax.random.normal(rng, x.shape)
-        x_mean = batch_mul(x+batch_mul(beta, self.score_fn(x,t)), 1./jnp.sqrt(1-beta))
+        x_mean = batch_mul(1./jnp.sqrt(1-beta), x+batch_mul(beta, self.score_fn(x,t)))
         x = x_mean + batch_mul(jnp.sqrt(beta), z)
         return x, x_mean
     
@@ -125,6 +131,31 @@ class AncestralSamplingPredictor(Predictor):
             return self.vpsde_update(rng, x, t)
         return self.vesde_update(rng, x, t)
     
+class ProbabilityFlowPredictor(Predictor):
+    def __init__(self, sde, score_fn, probability_flow=False, n_steps=1_000):
+        super().__init__(sde, score_fn, probability_flow, n_steps)
+
+    def vpsde_update(self,x,t):
+        timestep = self.sde.t_to_idx(t)
+        beta = self.sde.discrete_betas[timestep]
+        x_mean = batch_mul(2.-jnp.sqrt(1.-beta),x)+batch_mul(0.5*beta, self.score_fn(x,t))
+        x = x_mean
+        return x, x_mean
+    
+    def vesde_update(self, x, t):
+        timestep = self.sde.t_to_idx(t)
+        sigma = self.sde.discrete_sigmas[timestep]
+        safe_idx = jnp.maximum(0, timestep-1)
+        sigma_prev = jnp.where(timestep>0,self.sde.discrete_sigmas[safe_idx], 0.0)
+        x_mean = x + batch_mul(0.5*(sigma**2-sigma_prev**2), self.score_fn(x,t))
+        x = x_mean
+        return x, x_mean
+    
+    def update_fn(self, rng, x, t):
+        if isinstance(self.sde, VPSDE):
+            return self.vpsde_update(x, t)
+        return self.vesde_update(x, t)    
+
 # Note: Algorithms 4 and 5 in the paper actually correspond to vanilla Langevin dynamcs    
 class LangevinCorrector(Corrector):
     def __init__(self, sde, score_fn, snr, n_steps):
@@ -144,9 +175,9 @@ class LangevinCorrector(Corrector):
             rng, step_rng = jax.random.split(rng)
             z = jax.random.normal(step_rng, x.shape)
             score_norm = jnp.linalg.norm(score.reshape((score.shape[0], -1)), axis=-1).mean()
-            # score_norm = jax.lax.pmean(score_norm, axis_name='batch')
+            score_norm = jax.lax.pmean(score_norm, axis_name='batch')
             noise_norm = jnp.linalg.norm(z.reshape((z.shape[0],-1)), axis=-1).mean()
-            # noise_norm = jax.lax.pmean(noise_norm, axis_name='batch')
+            noise_norm = jax.lax.pmean(noise_norm, axis_name='batch')
             step_size = (self.snr*noise_norm/score_norm)**2*2*alpha
             x_mean = x + step_size*score
             x = x_mean + jnp.sqrt(2*step_size)* z
@@ -200,52 +231,62 @@ def pc_sampler(
             vec_t = jnp.full((shape[0],), t)
             rng, step_rng = jax.random.split(rng)
             x, x_mean = corrector.update_fn(step_rng, x, vec_t)
-            rng, step_rng = jax.random.split(rng)
-            x, x_mean = predictor.update_fn(step_rng, x, vec_t)
+            if isinstance(predictor, EulerMaruyamaPredictor) or isinstance(predictor, ReverseDiffusionPredictor) or isinstance(predictor, AncestralSamplingPredictor) or isinstance(predictor, ProbabilityFlowPredictor):
+                rng, step_rng = jax.random.split(rng)
+                x, x_mean = predictor.update_fn(step_rng, x, vec_t)
             return rng, x, x_mean
         
         _, x, x_mean = jax.lax.fori_loop(0, sde.N, iteration, (rng, x, x))
         return (inverse_scaler(x_mean) if denoise else x), sde.N*(n_steps+1)
 
-    return jax.jit(sampler_batch)
+    return jax.pmap(sampler_batch, axis_name='batch')
 
 def ode_sampler(
         sde, score_fn, shape, inverse_scaler, denoise=False, 
         rtol=1e-5, atol=1e-5, method='RK45', eps=1e-3    
     ):
+    num_devices = jax.local_device_count()
+    multi_device_shape = (num_devices,)+shape
 
-    @jax.jit
+    @jax.pmap
     def denoise_update_fn(rng, x):
         predictor = ReverseDiffusionPredictor(sde, score_fn, probability_flow=False)
         vec_e = jnp.full((x.shape[0],), eps)
         _, x = predictor.update_fn(rng, x, vec_e)
         return x
     
-    @jax.jit
+    @jax.pmap
     def drift_fn(x,t):
         f, _ = sde.reverse_sde(x,t, score_fn(x,t), probability_flow=True)
         return f
     
     def sampler(rng, z=None):
-        rng, step_rng = jax.random.split(rng)
-        x = z if z is not None else sde.prior_sampling(step_rng, shape)
+        if z is not None:
+            x = z
+        else:
+            rng, step_rng = jax.random.split(rng)
+            global_shape = (num_devices*shape[0],)+shape[1:]
+            x = sde.prior_sampling(step_rng, global_shape)
+            x = x.reshape(multi_device_shape)
 
         def ode_fn(t,x_flat):
-            x_reshaped = x_flat.reshape(shape)
-            vec_t = jnp.full((x_reshaped.shape[0],), t)
+            x_reshaped = x_flat.reshape(multi_device_shape)
+            vec_t = jnp.full((x_reshaped.shape[0],x_reshaped.shape[1]), t)
             drift = drift_fn(x_reshaped, vec_t)
-            return jnp.ravel(drift)
+            return jnp.array(drift).reshape(-1)
             
-        x_flat = jnp.ravel(x)    
-        solution = integrate.solve_ivp(ode_fn, (sde.T, eps), x_flat, rtol=rtol, atol=atol, method=method)
+        x_flat = jnp.array(x).reshape(-1)    
+        solution = integrate.solve_ivp(
+            ode_fn, (sde.T, eps), x_flat, rtol=rtol, atol=atol, method=method
+        )
 
         nfe = solution.nfev
-        x = jnp.asarray(solution.y[:,-1]).reshape(shape)
+        x = jnp.asarray(solution.y[:,-1]).reshape(multi_device_shape)
 
         if denoise:
-            rng, step_rng = jax.random.split(rng)
-            step_rng = jnp.asarray(step_rng)
-            x = denoise_update_fn(step_rng, x)
+            rng, *step_rngs = jax.random.split(rng, num_devices+1)
+            step_rngs = jnp.stack(step_rngs)
+            x = denoise_update_fn(step_rngs, x)
 
         x = inverse_scaler(x)
         return x, nfe
