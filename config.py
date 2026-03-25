@@ -202,7 +202,7 @@ def get_config_ncsnpp_cifar10(continuous=False, deep=False):
     config.model.fir = True
     config.model.fir_kernel = [1,3,3,1]
     config.model.progressive = 'none'
-    config.model.progressive_input = 'none'
+    config.model.progressive_input = 'residual'
     config.model.progressive_combine = 'sum'
     config.model.embedding_type = 'Fourier' if continuous else 'positional'
     config.model.fourier_scale = 16
