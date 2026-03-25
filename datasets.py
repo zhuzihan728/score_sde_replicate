@@ -34,33 +34,38 @@ def get_dataset(config):
     dataset_name = config.data.dataset
 
     def preprocess_cifar10(example):
-        image = tf.cast(example['image'], tf.float32) / 255.0
+        image = tf.cast(example['image'], tf.float32)
+        if config.data.uniform_dequantization:
+            image = (image + tf.random.uniform(tf.shape(image))) / 256.0
+        else:
+            image = image / 255.0
         if config.data.random_flip:
             image = tf.image.random_flip_left_right(image)
-        if config.data.uniform_dequantization:
-            image = image + tf.random.uniform(image.shape) / 256.0
         return image
 
     def preprocess_celeba(example):
-        image = tf.cast(example['image'], tf.float32) / 255.0
+        image = tf.cast(example['image'], tf.float32)
         # central_crop(img, 140)
         crop_size = 140
-        top = (image.shape[0] - crop_size) // 2
-        left = (image.shape[1] - crop_size) // 2
+        shape = tf.shape(image)
+        top = (shape[0] - crop_size) // 2
+        left = (shape[1] - crop_size) // 2
         image = tf.image.crop_to_bounding_box(image, top, left, crop_size, crop_size)
         # Resize to target resolution
-        image = tf.image.resize(image, [image_size, image_size], 
+        image = tf.image.resize(image, [image_size, image_size],
                                 method='bilinear', antialias=True)
+        if config.data.uniform_dequantization:
+            image = (image + tf.random.uniform(tf.shape(image))) / 256.0
+        else:
+            image = image / 255.0
         if config.data.random_flip:
             image = tf.image.random_flip_left_right(image)
-        if config.data.uniform_dequantization:
-            image = image + tf.random.uniform(image.shape) / 256.0
         return image
 
     def preprocess_lsun(example):
-        image = tf.cast(example['image'], tf.float32) / 255.0
+        image = tf.cast(example['image'], tf.float32)
         # Center crop to square, then resize
-        shape = tf.shape(example['image'])
+        shape = tf.shape(image)
         min_side = tf.minimum(shape[0], shape[1])
         image = tf.image.crop_to_bounding_box(
             image,
@@ -70,10 +75,12 @@ def get_dataset(config):
         )
         image = tf.image.resize(image, [image_size, image_size],
                                 method='bilinear', antialias=True)
+        if config.data.uniform_dequantization:
+            image = (image + tf.random.uniform(tf.shape(image))) / 256.0
+        else:
+            image = image / 255.0
         if config.data.random_flip:
             image = tf.image.random_flip_left_right(image)
-        if config.data.uniform_dequantization:
-            image = image + tf.random.uniform(image.shape) / 256.0
         return image
 
     # Select dataset and preprocessing
