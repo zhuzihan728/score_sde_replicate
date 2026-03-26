@@ -9,12 +9,13 @@ import library.sde_lib as sde_lib
 
 def get_sde(config):
     N = config.training.sde_N
-    if config.sampler.sampler_steps == 2000:
+    sampler_steps = config.sampler.sampler_steps if 'sampler' in config else None
+    if sampler_steps == 2000:
         N = 2000
     if config.training.sde == 'vesde':
         return VESDE(config.model.sigma_min, config.model.sigma_max, N), 1e-5
     elif config.training.sde == 'vpsde':
-        factor = 2. if config.sampler.sampler_steps == 2000 else 1.
+        factor = 2. if sampler_steps == 2000 else 1.
         return VPSDE(config.model.beta_min/factor, config.model.beta_max/factor, N), 1e-3
     else:
         return subVPSDE(config.model.beta_min, config.model.beta_max, N), 1e-3

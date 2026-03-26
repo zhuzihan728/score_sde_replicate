@@ -50,13 +50,13 @@ def train(config, logdir):
 
     pathlib.Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
     ckpt_mgr = ocp.CheckpointManager(
-        ckpt_dir, ocp.PyTreeCheckpointer(),
+        ckpt_dir,
         options=ocp.CheckpointManagerOptions(max_to_keep=2, create=True),
     )
     if ckpt_mgr.latest_step() is not None:
         target = {'params': params, 'ema_params': ema_params,
                   'opt_state': opt_state, 'step': 0}
-        r = ckpt_mgr.restore(ckpt_mgr.latest_step(), items=target)
+        r = ckpt_mgr.restore(ckpt_mgr.latest_step(), args=ocp.args.StandardRestore(target))
         params, ema_params, opt_state = r['params'], r['ema_params'], r['opt_state']
         start_step = int(r['step']) + 1
         print(f"Resumed from step {start_step - 1}")
@@ -137,10 +137,10 @@ def train(config, logdir):
             last_sample_t = time.time()
 
         if step % 10_000 == 0:
-            ckpt_mgr.save(step, items={
+            ckpt_mgr.save(step, args=ocp.args.StandardSave({
                 'params': unre(params), 'ema_params': unre(ema_params),
                 'opt_state': unre(opt_state), 'step': step,
-            })
+            }))
 
     writer.flush()
     print("Done.")

@@ -124,13 +124,14 @@ def load_images_from_dir(image_dir, H, C):
 
         mode = 'RGB' if C == 3 else 'L'
         img_arr  = _load_resize(ip, mode)   # (H, H, C) or (H, H)
-        mask_arr = _load_resize(mp, 'L')    # (H, H)
+        mask_arr = _load_resize(mp, 'RGB')  # (H, H, 3)
 
         if img_arr.ndim == 2:
             img_arr = img_arr[:, :, None]
 
-        # White pixels in mask image = inpaint region → 0; rest → 1
-        binary_mask = (mask_arr < 0.8).astype(np.float32)          # (H, H)
+        # Green pixels in mask image = inpaint region → 0; rest → 1
+        is_green = (mask_arr[..., 1] > 0.5) & (mask_arr[..., 0] < 0.5) & (mask_arr[..., 2] < 0.5)
+        binary_mask = (~is_green).astype(np.float32)                # (H, H)
         binary_mask = np.broadcast_to(binary_mask[:, :, None], (H, H, C)).copy()
 
         images.append(img_arr)
@@ -162,6 +163,7 @@ def pc_inpaint(rng, data, mask, sde, predictor, corrector, inverse_scaler,
     N = data.shape[0]
     timesteps = jnp.linspace(sde.T, eps, sde.N)
 
+    @jax.jit
     def pred_update(rng, x, t):
         vec_t = jnp.full((N,), t)
         rng, k = jax.random.split(rng)
@@ -174,6 +176,7 @@ def pc_inpaint(rng, data, mask, sde, predictor, corrector, inverse_scaler,
         x_mean = x_mean * (1.0 - mask) + mean_data   * mask
         return rng, x, x_mean
 
+    @jax.jit
     def corr_update(rng, x, t):
         vec_t = jnp.full((N,), t)
         rng, k = jax.random.split(rng)
