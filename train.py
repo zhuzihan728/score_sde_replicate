@@ -1,4 +1,4 @@
-import argparse, functools, pathlib, time
+import argparse, functools, pathlib
 import numpy as np
 import jax, jax.numpy as jnp
 import optax
@@ -19,7 +19,7 @@ def train(config, logdir):
     assert config.training.batch_size % n_dev == 0
     local_bs = config.training.batch_size // n_dev
     H, C = config.data.image_size, config.data.num_channels
-    ckpt_dir = f'{logdir}/ckpt'
+    ckpt_dir = str(pathlib.Path(f'{logdir}/ckpt').resolve())
 
     writer = tf.summary.create_file_writer(logdir)
     rng = jax.random.PRNGKey(0)
@@ -108,7 +108,6 @@ def train(config, logdir):
         return jnp.clip(inverse_scaler(x_mean), 0.0, 1.0)
 
     ema_decay = config.model.ema_rate
-    last_sample_t = time.time()
     print(f"{config.training.sde} continuous={config.training.continuous} | "
           f"{n_dev} device(s) | {config.training.n_iters:,} steps | {logdir}")
 
@@ -125,7 +124,7 @@ def train(config, logdir):
         if step % 500 == 0:
             print(f"  step {step:7d}  loss {float(loss[0]):.4f}")
 
-        if time.time() - last_sample_t >= 30 * 60:
+        if step % 10_000 == 0:
             print(f"  [step {step}] sampling...")
             rng, srng = jax.random.split(rng)
             imgs = np.array(pc_sample(srng, unre(ema_params)))
@@ -134,9 +133,8 @@ def train(config, logdir):
             with writer.as_default():
                 tf.summary.image('samples/pc_4', grid, step=step)
             writer.flush()
-            last_sample_t = time.time()
 
-        if step % 10_000 == 0:
+        if step % 1_000 == 0:
             ckpt_mgr.save(step, args=ocp.args.StandardSave({
                 'params': unre(params), 'ema_params': unre(ema_params),
                 'opt_state': unre(opt_state), 'step': step,
