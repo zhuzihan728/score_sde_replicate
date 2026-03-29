@@ -1,13 +1,7 @@
-#!/usr/bin/env python
-"""
-For each pair of images:
-  1. Sample two latent codes z1, z2 from the prior (VESDE Gaussian).
-  2. Spherically interpolate (slerp) between them for N_INTERP steps.
-  3. Decode each interpolated latent via the probability-flow ODE.
-"""
-
 import argparse, pathlib
 import numpy as np
+from PIL import Image
+from scipy import integrate
 import jax, jax.numpy as jnp
 import orbax.checkpoint as ocp
 import matplotlib; matplotlib.use('Agg')
@@ -17,14 +11,12 @@ from config import get_config
 from sde import get_sde
 from model import UNet
 from score import get_score_fn
-from datasets import get_data_inverse_scaler
-from samplers import ode_sampler, ReverseDiffusionPredictor, LangevinCorrector
+from datasets import get_data_scaler, get_data_inverse_scaler, get_dataset
 
-# ── Config (mirrors eval.py / sample.py) ──────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 CFG_NAME  = 'vesde_ncsnpp_celeba_disc'
 CKPT_PATH = 'runs/ncsnpp_celeba/ckpt/50000'
-SNR       = 0.17   # CelebA override from eval.py
-
+IMG_DIR   = pathlib.Path('interpolate')
 OUT_DIR   = pathlib.Path('assets/eval/ncsnpp_celeba/interpolation')
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -36,6 +28,19 @@ def load_ckpt(ckpt_path, config):
     restored = checkpointer.restore(default_path)
     ema_params = jax.device_put(restored['ema_params'], jax.devices()[0])
     return model, ema_params
+
+
+def load_image(path, image_size):
+    """Load image with CelebA-style preprocessing: center-crop 140, resize to image_size."""
+    img = Image.open(path).convert('RGB')
+    w, h = img.size
+    if min(w, h) >= 140:
+        crop = 140
+        left = (w - crop) // 2
+        top  = (h - crop) // 2
+        img  = img.crop((left, top, left + crop, top + crop))
+    img = img.resize((image_size, image_size), Image.BILINEAR)
+    return np.array(img, dtype=np.float32) / 255.0  # (H, W, C) in [0, 1]
 
 
 def slerp(z1, z2, alpha):
@@ -71,15 +76,17 @@ def save_grid(imgs, path, nrow):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--n_pairs',   type=int, default=4,
-                        help='Number of interpolation pairs (rows in the grid)')
-    parser.add_argument('--n_interp',  type=int, default=8,
-                        help='Number of interpolation steps per pair (including endpoints)')
-    parser.add_argument('--seed',      type=int, default=0)
-    parser.add_argument('--out_dir',   default=None,
-                        help='Output directory (default: assets/eval/ncsnpp_celeba/interpolation)')
-    parser.add_argument('--sampler',   choices=['ode', 'pc'], default='ode',
-                        help='Decoder to use: ode (probability-flow) or pc (predictor-corrector)')
+    parser.add_argument('--n_interp', type=int, default=8,
+                        help='Interpolation steps per pair (including endpoints)')
+    parser.add_argument('--out_dir',  default=None)
+    parser.add_argument('--rtol',     type=float, default=1e-5)
+    parser.add_argument('--atol',     type=float, default=1e-5)
+    parser.add_argument('--n_celeba', type=int, default=None,
+                        help='Use N random pairs from CelebA eval set instead of interpolate/')
+    parser.add_argument('--seed',     type=int, default=0,
+                        help='Shuffle seed for --n_celeba')
+    parser.add_argument('--show_originals', action='store_true', default=False,
+                        help='Prepend/append original images to each row for reference')
     args = parser.parse_args()
 
     out_dir = pathlib.Path(args.out_dir) if args.out_dir else OUT_DIR
@@ -88,7 +95,9 @@ def main():
     # ── Load model ────────────────────────────────────────────────────────────
     config = get_config(CFG_NAME)
     H, C   = config.data.image_size, config.data.num_channels
+    shape  = (1, H, H, C)
     sde, eps = get_sde(config)
+    scaler         = get_data_scaler(config.data.centered)
     inverse_scaler = get_data_inverse_scaler(config.data.centered)
 
     print(f"Loading {CKPT_PATH} …")
@@ -96,72 +105,111 @@ def main():
     score_fn = get_score_fn(sde, model, ema_params,
                             train=False, continuous=config.training.continuous)
 
-    rng = jax.random.PRNGKey(args.seed)
+    # ── Probability-flow ODE (shared by encoder and decoder) ──────────────────
+    # drift_fn returns f(x,t) - 0.5·g(t)²·score(x,t)  (same for both directions)
+    @jax.jit
+    def drift_fn(x, t):
+        f, _ = sde.reverse_sde(x, t, score_fn(x, t), probability_flow=True)
+        return f
 
-    # ── Build decoder ─────────────────────────────────────────────────────────
-    if args.sampler == 'pc':
-        pred = ReverseDiffusionPredictor(sde, score_fn, False)
-        corr = LangevinCorrector(sde, score_fn, SNR, n_steps=1)
+    def ode_fn(t, x_flat):
+        x_r  = jnp.asarray(x_flat).reshape(shape)
+        vec_t = jnp.full((1,), t)
+        return np.array(drift_fn(x_r, vec_t)).reshape(-1)
 
-        @jax.jit
-        def pc_from_z(rng, z):
-            ts = jnp.linspace(sde.T, eps, sde.N)
-            def step(i, val):
-                rng, x, x_mean = val
-                t = jnp.full((1,), ts[i])
-                rng, k = jax.random.split(rng)
-                x, x_mean = corr.update_fn(k, x, t)
-                rng, k = jax.random.split(rng)
-                x, x_mean = pred.update_fn(k, x, t)
-                return rng, x, x_mean
-            _, _, x_mean = jax.lax.fori_loop(0, sde.N, step, (rng, z, z))
-            return inverse_scaler(x_mean)
+    def encode(x):
+        """Real image → latent: integrate probability-flow ODE forward (ε → T)."""
+        sol = integrate.solve_ivp(
+            ode_fn, (eps, sde.T), np.array(x).reshape(-1),
+            method='RK45', rtol=args.rtol, atol=args.atol
+        )
+        print(f"    encode NFE: {sol.nfev}")
+        return jnp.asarray(sol.y[:, -1]).reshape(shape)
+
+    def decode(z):
+        """Latent → image: integrate probability-flow ODE backward (T → ε)."""
+        sol = integrate.solve_ivp(
+            ode_fn, (sde.T, eps), np.array(z).reshape(-1),
+            method='RK45', rtol=args.rtol, atol=args.atol
+        )
+        print(f"    decode NFE: {sol.nfev}")
+        x = jnp.asarray(sol.y[:, -1]).reshape(shape)
+        return inverse_scaler(x)
+
+    # ── Build pairs list ─────────────────────────────────────────────────────
+    if args.n_celeba:
+        print(f"Loading {args.n_celeba} random pairs from CelebA eval set …")
+        _, eval_ds = get_dataset(config)
+        imgs_np = np.stack(list(
+            eval_ds.unbatch()
+                   .shuffle(10_000, seed=args.seed)
+                   .take(args.n_celeba * 2)
+                   .as_numpy_iterator()
+        ))  # (n*2, H, H, C) in [0, 1]
+        pairs = [
+            (jnp.asarray(scaler(imgs_np[2*i]))[None],
+             jnp.asarray(scaler(imgs_np[2*i+1]))[None],
+             f'celeba_{i+1:02d}')
+            for i in range(args.n_celeba)
+        ]
+    else:
+        pairs = []
+        idx = 1
+        while True:
+            p1 = IMG_DIR / f'{idx}-1.jpg'
+            p2 = IMG_DIR / f'{idx}-2.jpg'
+            if not p1.exists() or not p2.exists():
+                break
+            pairs.append((
+                jnp.asarray(scaler(load_image(p1, H)))[None],
+                jnp.asarray(scaler(load_image(p2, H)))[None],
+                f'{idx:02d}',
+            ))
+            idx += 1
 
     # ── Interpolation loop ────────────────────────────────────────────────────
-    all_rows = []  # list of (n_interp, H, H, C) arrays
+    all_rows = []
 
-    for pair_idx in range(args.n_pairs):
-        print(f"\nPair {pair_idx + 1}/{args.n_pairs}")
+    for pair_idx, (x1, x2, label) in enumerate(pairs, 1):
+        print(f"\nPair {pair_idx}/{len(pairs)}: {label}")
 
-        # Sample two independent prior latents
-        rng, k1, k2 = jax.random.split(rng, 3)
-        z1 = sde.prior_sampling(k1, (1, H, H, C))  # (1, H, H, C)
-        z2 = sde.prior_sampling(k2, (1, H, H, C))
+        # Encode both images into the latent space
+        print("  Encoding …")
+        z1 = encode(x1)  # (1, H, H, C) at t=T
+        z2 = encode(x2)
 
-        # Build interpolated latent batch (n_interp, H, H, C)
-        alphas = np.linspace(0.0, 1.0, args.n_interp)
+        # Slerp between the two latent codes
+        alphas   = np.linspace(0.0, 1.0, args.n_interp)
         z_interp = jnp.stack(
             [slerp(z1[0], z2[0], float(a)) for a in alphas], axis=0
         )  # (n_interp, H, H, C)
 
-        print(f"  Decoding {args.n_interp} latents via {args.sampler.upper()} …")
+        # Decode each interpolated latent back to image space
+        print(f"  Decoding {args.n_interp} latents …")
+        imgs_list = []
+        for i in range(args.n_interp):
+            img = decode(z_interp[i:i+1])
+            imgs_list.append(np.clip(np.array(img), 0, 1))
+            print(f"    step {i+1}/{args.n_interp}")
+        imgs = np.concatenate(imgs_list, axis=0)  # (n_interp, H, H, C)
 
-        if args.sampler == 'ode':
-            shape = (args.n_interp, H, H, C)
-            decode = ode_sampler(sde, score_fn, shape, inverse_scaler, eps=eps)
-            rng, k = jax.random.split(rng)
-            imgs, nfe = decode(k, z=z_interp)
-            print(f"  NFE: {nfe}")
-        else:
-            imgs_list = []
-            for i in range(args.n_interp):
-                z_i = z_interp[i:i+1]  # (1, H, H, C)
-                rng, k = jax.random.split(rng)
-                img = pc_from_z(k, z_i)
-                imgs_list.append(np.clip(np.array(img), 0, 1))
-                print(f"    step {i+1}/{args.n_interp}")
-            imgs = np.concatenate(imgs_list, axis=0)  # (n_interp, H, H, C)
+        if args.show_originals:
+            orig1 = np.clip(np.array(inverse_scaler(x1)), 0, 1)
+            orig2 = np.clip(np.array(inverse_scaler(x2)), 0, 1)
+            imgs  = np.concatenate([orig1, imgs, orig2], axis=0)
 
-        imgs = np.clip(np.array(imgs), 0, 1)
+        nrow = args.n_interp + (2 if args.show_originals else 0)
         all_rows.append(imgs)
+        save_grid(imgs, out_dir / f'pair_{label}.png', nrow=nrow)
 
-        # Save per-pair strip
-        save_grid(imgs, out_dir / f'pair_{pair_idx:02d}.png', nrow=args.n_interp)
+    if not all_rows:
+        print(f"No pairs found. Pass --n_celeba N or add images to {IMG_DIR}/")
+        return
 
-    # ── Combined grid (all pairs stacked vertically) ──────────────────────────
-    all_imgs = np.concatenate(all_rows, axis=0)  # (n_pairs * n_interp, H, H, C)
-    save_grid(all_imgs, out_dir / 'interpolation_grid.png', nrow=args.n_interp)
-    print(f"\nDone. Grid: {args.n_pairs} rows × {args.n_interp} cols → {out_dir}/interpolation_grid.png")
+    nrow = args.n_interp + (2 if args.show_originals else 0)
+    all_imgs = np.concatenate(all_rows, axis=0)
+    save_grid(all_imgs, out_dir / 'interpolation_grid.png', nrow=nrow)
+    print(f"\nDone. {len(pairs)} pairs × {nrow} cols → {out_dir}/interpolation_grid.png")
 
 
 if __name__ == '__main__':
