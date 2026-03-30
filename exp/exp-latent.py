@@ -238,6 +238,7 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
         tick_labels=["Shuffled baseline", "Model A vs B"],
         patch_artist=True, widths=0.28,
         vert=False, flierprops=flierprops,
+        medianprops=dict(color='black'),
     )
     bp['boxes'][0].set_facecolor("#AAC4FF"); bp['boxes'][0].set_alpha(0.9)   # pastel blue
     bp['boxes'][1].set_facecolor("#FFAAAA"); bp['boxes'][1].set_alpha(0.9)   # pastel red
@@ -273,7 +274,7 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
     fig, ax = plt.subplots(figsize=(5.5, 4))
 
-    ax.hist(r_per_dim, bins=12, range=(0, 1), color="#D32F2F", alpha=0.9, rwidth=1/1.2)
+    ax.hist(r_per_dim, bins=50, range=(0, 1), color="#D32F2F", alpha=0.9, rwidth=1/1.2)
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
     ax.set_xticks([0.00, 0.25, 0.50, 0.75, 1.00])
