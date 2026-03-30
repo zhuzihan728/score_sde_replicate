@@ -14,10 +14,11 @@ from score import get_score_fn
 from datasets import get_data_scaler, get_data_inverse_scaler, get_dataset
 
 # ── Config ────────────────────────────────────────────────────────────────────
-CFG_NAME  = 'vesde_ncsnpp_celeba_disc'
-CKPT_PATH = 'runs/ncsnpp_celeba/ckpt/50000'
-IMG_DIR   = pathlib.Path('interpolate')
-OUT_DIR   = pathlib.Path('assets/eval/ncsnpp_celeba/interpolation')
+VARIANTS = {
+    'disc': ('vesde_ncsnpp_celeba_disc', 'runs/ncsnpp_celeba_disc/ckpt/50000'),
+    'cont': ('vesde_ncsnpp_celeba_cont', 'runs/ncsnpp_celeba_cont/ckpt/50000'),
+}
+IMG_DIR = pathlib.Path('interpolate')
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -85,23 +86,25 @@ def main():
                         help='Use N random pairs from CelebA eval set instead of interpolate/')
     parser.add_argument('--seed',     type=int, default=0,
                         help='Shuffle seed for --n_celeba')
+    parser.add_argument('--variant', choices=['disc', 'cont'], default='disc')
     parser.add_argument('--show_originals', action='store_true', default=False,
                         help='Prepend/append original images to each row for reference')
     args = parser.parse_args()
 
-    out_dir = pathlib.Path(args.out_dir) if args.out_dir else OUT_DIR
+    cfg_name, ckpt_path = VARIANTS[args.variant]
+    out_dir = pathlib.Path(args.out_dir) if args.out_dir else pathlib.Path(f'assets/eval/ncsnpp_celeba_{args.variant}/interpolation')
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load model ────────────────────────────────────────────────────────────
-    config = get_config(CFG_NAME)
+    config = get_config(cfg_name)
     H, C   = config.data.image_size, config.data.num_channels
     shape  = (1, H, H, C)
     sde, eps = get_sde(config)
     scaler         = get_data_scaler(config.data.centered)
     inverse_scaler = get_data_inverse_scaler(config.data.centered)
 
-    print(f"Loading {CKPT_PATH} …")
-    model, ema_params = load_ckpt(CKPT_PATH, config)
+    print(f"Loading {ckpt_path} …")
+    model, ema_params = load_ckpt(ckpt_path, config)
     score_fn = get_score_fn(sde, model, ema_params,
                             train=False, continuous=config.training.continuous)
 
