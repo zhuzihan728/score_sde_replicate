@@ -64,7 +64,7 @@ C2000 = ('C2000', 2000, 1)
 MODELS = [
     {
         'name':     'vesde_cifar10',
-        'ckpt':     'runs/vesde_cifar10/ckpt/190000',
+        'ckpt':     'runs/vesde_cifar10_disc/ckpt/190000',
         'cfg_key':  'vesde_ddpm_disc',
         'sde_type': 'vesde',
         'eps':      1e-5,
@@ -72,7 +72,7 @@ MODELS = [
     },
     {
         'name':     'ddpm_cifar10_low',
-        'ckpt':     'runs/ddpm_cifar10_low/ckpt/190000',
+        'ckpt':     'runs/vpsde_cifar10_disc/ckpt/190000',
         'cfg_key':  'vpsde_ddpm_disc',
         'sde_type': 'vpsde',
         'eps':      1e-3,
