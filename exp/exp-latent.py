@@ -281,7 +281,7 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
     ax.set_xticks([0.00, 0.25, 0.50, 0.75, 1.00])
-    ax.set_yticks([0, 200, 400, 600, 800, 1000, 1200])
+    ax.set_yticks([0,  400,  800,  1200])
     ax.set_title("Dimension-wise correlation coefficients", fontsize=11)
     ax.set_axisbelow(True)
     ax.xaxis.grid(True, color='grey', alpha=0.3, linewidth=0.8)
@@ -290,7 +290,7 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.spines["right"].set_visible(False)
 
     # ── inset: one fixed dimension, 16 images ────────────────────────────
-    ax_inset = ax.inset_axes([0.22, 0.20, 0.36, 0.40])   # square, slightly bigger
+    ax_inset = ax.inset_axes([0.22, 0.20, 0.34, 0.40])   # square, slightly bigger
     zA = codes_A[:, dim_idx]   # (n_images,)
     zB = codes_B[:, dim_idx]   # (n_images,)
     r_img, _ = pearsonr(zA, zB)
