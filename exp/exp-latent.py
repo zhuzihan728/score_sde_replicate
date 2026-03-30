@@ -290,7 +290,7 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.spines["right"].set_visible(False)
 
     # ── inset: one fixed dimension, 16 images ────────────────────────────
-    ax_inset = ax.inset_axes([0.22, 0.20, 0.34, 0.40])   # square, slightly bigger
+    ax_inset = ax.inset_axes([0.22, 0.20, 0.34, 0.44])   # square, slightly bigger
     zA = codes_A[:, dim_idx]   # (n_images,)
     zB = codes_B[:, dim_idx]   # (n_images,)
     r_img, _ = pearsonr(zA, zB)
