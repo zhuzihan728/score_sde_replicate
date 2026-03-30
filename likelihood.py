@@ -1,5 +1,4 @@
 import jax
-import flax
 import jax.numpy as jnp
 from scipy import integrate
 

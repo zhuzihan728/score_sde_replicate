@@ -5,8 +5,6 @@ import jax.scipy as jsp
 import numpy as np
 from utils import batch_mul
 
-import library.sde_lib as sde_lib
-
 def get_sde(config):
     N = config.training.sde_N
     sampler_steps = config.sampler.sampler_steps if 'sampler' in config else None
@@ -19,15 +17,6 @@ def get_sde(config):
         return VPSDE(config.model.beta_min/factor, config.model.beta_max/factor, N), 1e-3
     else:
         return subVPSDE(config.model.beta_min, config.model.beta_max, N), 1e-3
-    
-def get_old_sde(config):
-    N = config.training.sde_N
-    if config.training.sde == 'vesde':
-        return sde_lib.VESDE(config.model.sigma_min, config.model.sigma_max, N)
-    elif config.training.sde == 'vpsde':
-        return sde_lib.VPSDE(config.model.beta_min, config.model.beta_max, N)
-    else:
-        return sde_lib.subVPSDE(config.model.beta_min, config.model.beta_max, N)
 
 class VPSDE:
     """β(t) = β_min + t(β_max − β_min), variance-preserving SDE."""

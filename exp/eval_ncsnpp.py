@@ -6,9 +6,12 @@
 import argparse, importlib.util, pathlib, sys, time
 import numpy as np
 import jax, jax.numpy as jnp
+import tensorflow_hub as tfhub
 
-# ── Put score_sde/ on the path so its internal imports resolve ─────────────────
+# ── Ensure MLMI4/ root and score_sde/ are both on the path ────────────────────
+_ROOT      = pathlib.Path(__file__).resolve().parent.parent
 _SCORE_SDE = pathlib.Path(__file__).parent / 'score_sde'
+sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_SCORE_SDE))
 
 from flax.training import checkpoints
@@ -22,10 +25,15 @@ from config import get_config
 
 # ── FID / IS helpers (verified correct in eval.py) ────────────────────────────
 from eval import (
-    get_inception_model, run_inception,
+    run_inception,
     inception_score, frechet_distance,
     load_real_stats, to_uint8, save_grid,
 )
+
+INCEPTION_TFHUB = 'https://tfhub.dev/tensorflow/tfgan/eval/inception/1'
+
+def get_inception_model():
+    return tfhub.load(INCEPTION_TFHUB)
 
 # ══════════════════════════════════════════════════════════════════════════════
 MODELS = {

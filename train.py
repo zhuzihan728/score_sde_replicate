@@ -14,7 +14,31 @@ from score import get_score_fn
 from samplers import EulerMaruyamaPredictor, ReverseDiffusionPredictor, LangevinCorrector
 
 
-def train(config, logdir):
+def save_and_verify(ckpt_mgr, step, state, ckpt_dir):
+    """Save checkpoint and verify it was written correctly. Raises on failure."""
+    import shutil
+    ckpt_mgr.save(step, args=ocp.args.StandardSave(state))
+    ckpt_mgr.wait_until_finished()
+    # Remove any leftover tmp dirs from a failed save
+    for tmp in pathlib.Path(ckpt_dir).glob('*.orbax-checkpoint-tmp'):
+        shutil.rmtree(tmp)
+        print(f"  removed stale tmp: {tmp.name}")
+    saved = ckpt_mgr.latest_step()
+    if saved != step:
+        raise RuntimeError(f"Checkpoint verification failed at step {step}: latest_step()={saved}")
+    print(f"  checkpoint saved ✓  step={step}")
+
+
+def backup_to_drive(logdir, drive_root, step):
+    """Copy entire logdir to <drive_root>/<step>/."""
+    import shutil
+    dst = pathlib.Path(drive_root) / str(step)
+    dst.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(logdir, dst, dirs_exist_ok=True)
+    print(f"  drive backup ✓  → {dst}")
+
+
+def train(config, logdir, drive_backup=None):
     n_dev = jax.local_device_count()
     assert config.training.batch_size % n_dev == 0
     local_bs = config.training.batch_size // n_dev
@@ -134,11 +158,15 @@ def train(config, logdir):
                 tf.summary.image('samples/pc_4', grid, step=step)
             writer.flush()
 
-        if step % 1_000 == 0:
-            ckpt_mgr.save(step, args=ocp.args.StandardSave({
+        is_last = (step == config.training.n_iters)
+        if step % 10_000 == 0 or is_last or step == start_step:
+            state = {
                 'params': unre(params), 'ema_params': unre(ema_params),
                 'opt_state': unre(opt_state), 'step': step,
-            }))
+            }
+            save_and_verify(ckpt_mgr, step, state, ckpt_dir)
+            if drive_backup is not None:
+                backup_to_drive(logdir, drive_backup, step)
 
     writer.flush()
     print("Done.")
@@ -151,8 +179,10 @@ if __name__ == '__main__':
     p.add_argument('--logdir', required=True)
     p.add_argument('--n_iters', type=int, default=None,
                    help='Override config n_iters (useful for short continuation runs)')
+    p.add_argument('--drive_backup', default=None,
+                   help='If set, mirror logdir here after every checkpoint (e.g. /content/drive/MyDrive/ncsnpp_celeba_cont)')
     args = p.parse_args()
     cfg = get_config(args.config)
     if args.n_iters is not None:
         cfg.training.n_iters = args.n_iters
-    train(cfg, args.logdir)
+    train(cfg, args.logdir, drive_backup=args.drive_backup)
