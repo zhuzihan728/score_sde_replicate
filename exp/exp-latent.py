@@ -234,13 +234,13 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
                       markerfacecolor='#aaa', markeredgecolor='#aaa', alpha=0.5)
     fig, ax = plt.subplots(figsize=(6.5, 2.6))
     bp = ax.boxplot(
-        [diffs_real, diffs_shuf],
-        tick_labels=["Model A vs B", "Shuffled baseline"],
+        [diffs_shuf, diffs_real],
+        tick_labels=["Shuffled baseline", "Model A vs B"],
         patch_artist=True, widths=0.28,
         vert=False, flierprops=flierprops,
     )
-    bp['boxes'][0].set_facecolor("#FFAAAA"); bp['boxes'][0].set_alpha(0.9)   # pastel red
-    bp['boxes'][1].set_facecolor("#AAC4FF"); bp['boxes'][1].set_alpha(0.9)   # pastel blue
+    bp['boxes'][0].set_facecolor("#AAC4FF"); bp['boxes'][0].set_alpha(0.9)   # pastel blue
+    bp['boxes'][1].set_facecolor("#FFAAAA"); bp['boxes'][1].set_alpha(0.9)   # pastel red
     ax.set_xlabel("$|z^A_i - z^B_i|$")
     ax.set_title("Dimension-wise encoding differences", fontsize=11)
     ax.spines["top"].set_visible(False)
@@ -255,7 +255,6 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
 def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
                                  dim_idx: int = 0,
-                                 bins: int = 50,
                                  save_path: str | None = None):
     """
     Fig 8 (right): histogram of dimension-wise Pearson r, with an inset
@@ -274,10 +273,10 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
     fig, ax = plt.subplots(figsize=(5.5, 4))
 
-    ax.hist(r_per_dim, bins=bins, color="#D32F2F", alpha=0.9, rwidth=0.82)
+    ax.hist(r_per_dim, bins=12, range=(0, 1), color="#D32F2F", alpha=0.9, rwidth=1/1.2)
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
-    ax.set_xticks([0.00, 0.25, 0.75, 1.00])
+    ax.set_xticks([0.00, 0.25, 0.50, 0.75, 1.00])
     ax.set_title("Dimension-wise correlation coefficients", fontsize=11)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
