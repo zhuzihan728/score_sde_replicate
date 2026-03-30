@@ -369,18 +369,29 @@ def draw_trajectories(spec, rng):
                 ax.imshow(img if C == 3 else img[..., 0],
                           cmap=None if C == 3 else 'gray', vmin=0, vmax=1)
                 ax.axis('off')
-            ylabel = f'{pred_name}\n{label}' if si == 0 else label
+            if si == 0:
+                ylabel = f'{pi + 1}. {pred_name}\n{label}'
+            else:
+                ylabel = label
             axes[row, 0].set_ylabel(ylabel, fontsize=6,
                                     rotation=0, ha='right', va='center', labelpad=45)
 
-    # Column headers: step index (for P2000/C2000) or alternating C/P labels
+    # Global step header on top row (P2000): 100, 200, ..., 2000
     for col in range(N_SNAPS):
         axes[0, col].set_title(str((col + 1) * SNAP_EVERY), fontsize=6)
+
+    # Per-cell C/P step headers on every PC1000 row
+    for pi in range(len(pred_names)):
+        pc_row = pi * len(sub_labels) + 2  # sub_labels index 2 = 'PC1000'
+        for col in range(N_SNAPS):
+            interval = (col // 2 + 1) * SNAP_EVERY
+            cp = 'C' if col % 2 == 0 else 'P'
+            axes[pc_row, col].set_title(f'{cp}{interval}', fontsize=5, pad=1)
 
     plt.subplots_adjust(wspace=0.02, hspace=0.05)
     out_path = spec['out'].parent / f"{spec['name']}_traj.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(str(out_path), dpi=150, bbox_inches='tight')
+    plt.savefig(str(out_path), dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved → {out_path}")
 

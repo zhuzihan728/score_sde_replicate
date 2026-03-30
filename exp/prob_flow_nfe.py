@@ -1,116 +1,121 @@
 #!/usr/bin/env python
 """
-prob_flow_nfe.py — Probability flow ODE samples vs NFE on CelebA (NCSN++).
-Layout: 2 rows x 3 cols, columns = NFE {14, 86, 548}.
-Output: assets/samples/prob_flow_nfe.png
+Checkpoint : runs/ncsnpp_celeba/ckpt/50000
+Config     : vesde_ncsnpp_celeba_disc
+Outputs    : assets/samples/ncsnpp_celeba-nfe/
+                nfe_sweep.npy      (n_tol, N_IMAGES, H, H, C)  float32
+                nfe_sweep_grid.png  rows = images, cols = tolerances (low→high)
+                nfe_log.txt         actual NFE recorded per tolerance level
 """
-import argparse, pathlib, sys
+import argparse, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import pathlib
 import numpy as np
 import jax, jax.numpy as jnp
+import orbax.checkpoint as ocp
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import orbax.checkpoint as ocp
 
 from config import get_config
-from sde import VESDE
+from sde import get_sde
 from model import UNet
 from score import get_score_fn
 from datasets import get_data_inverse_scaler
-from samplers import ProbabilityFlowPredictor, Corrector
+from samplers import ode_sampler
 
 VARIANTS = {
-    'disc': ('vesde_ncsnpp_celeba_disc', 'runs/ncsnpp_celeba_disc/ckpt/50000', False),
-    'cont': ('vesde_ncsnpp_celeba_cont', 'runs/ncsnpp_celeba_cont/ckpt/50000', True),
+    'disc': ('runs/ncsnpp_celeba_disc/ckpt/50000', 'vesde_ncsnpp_celeba_disc'),
+    'cont': ('runs/ncsnpp_celeba_cont/ckpt/50000', 'vesde_ncsnpp_celeba_cont'),
 }
-NFES   = [14, 86, 548]
-N_ROWS = 2
-EPS    = 1e-5
+N_IMAGES  = 4
+SEED      = 123
+
+# Tolerance sweep: loose → tight  (lower tol = more NFE = better quality)
+TOL_CONFIGS = [
+    ('tol=1e-1', 1e-1, 1e-1),
+    ('tol=1e-2', 1e-2, 1e-2),
+    ('tol=1e-3', 1e-3, 1e-3),
+    ('tol=1e-4', 1e-4, 1e-4),
+    ('tol=1e-5', 1e-5, 1e-5),   # reference quality
+]
 
 
-def load_model(ckpt_path, config):
-    model  = UNet(config=config)
-    path   = str(pathlib.Path(ckpt_path).resolve() / 'default')
-    params = ocp.PyTreeCheckpointer().restore(path)['ema_params']
-    return model, jax.device_put(params, jax.devices()[0])
-
-
-def make_sampler(sde, shape, pred, inv_scaler):
-    corr = Corrector()
-
-    @jax.jit
-    def _sample(rng):
-        rng, k = jax.random.split(rng)
-        x  = sde.prior_sampling(k, shape)
-        ts = jnp.linspace(sde.T, EPS, sde.N)
-
-        def step(i, val):
-            rng, x, xm = val
-            t = jnp.full((shape[0],), ts[i])
-            rng, k = jax.random.split(rng)
-            x, xm = corr.update_fn(k, x, t)
-            rng, k = jax.random.split(rng)
-            x, xm = pred.update_fn(k, x, t)
-            return rng, x, xm
-
-        _, _, xm = jax.lax.fori_loop(0, sde.N, step, (rng, x, x))
-        return inv_scaler(xm)
-
-    return _sample
+def load_ckpt(ckpt_path, config):
+    model = UNet(config=config)
+    default_path = str(pathlib.Path(ckpt_path).resolve() / 'default')
+    restored = ocp.PyTreeCheckpointer().restore(default_path)
+    ema_params = jax.device_put(restored['ema_params'], jax.devices()[0])
+    return model, ema_params
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--variant', choices=['disc', 'cont'], default='disc',
-                        help='CelebA model variant: disc (default) or cont')
+    parser.add_argument('--variant', choices=['disc', 'cont'], default='disc')
+    parser.add_argument('--seed', type=int, default=SEED)
     args = parser.parse_args()
 
-    cfg_name, ckpt, continuous = VARIANTS[args.variant]
-    out = pathlib.Path(f'assets/samples/prob_flow_nfe_{args.variant}.png')
+    ckpt, cfg_name = VARIANTS[args.variant]
+    out = pathlib.Path(f'assets/samples/ncsnpp_celeba_nfe_{args.variant}')
+    out.mkdir(parents=True, exist_ok=True)
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    rng = jax.random.PRNGKey(0)
+    config = get_config(cfg_name)
+    H, C   = config.data.image_size, config.data.num_channels
+    sde, eps = get_sde(config)
+    inverse_scaler = get_data_inverse_scaler(config.data.centered)
 
-    config     = get_config(cfg_name)
-    H, C       = config.data.image_size, config.data.num_channels
-    inv_scaler = get_data_inverse_scaler(config.data.centered)
-    sigma_min  = config.model.sigma_min
-    sigma_max  = config.model.sigma_max
+    print(f"Loading {ckpt} …")
+    model, ema_params = load_ckpt(ckpt, config)
+    score_fn = get_score_fn(sde, model, ema_params,
+                            train=False, continuous=config.training.continuous)
 
-    print(f"Loading checkpoint: {ckpt}")
-    model, params = load_model(ckpt, config)
+    shape = (N_IMAGES, H, H, C)
 
-    score_sde = VESDE(sigma_min, sigma_max, 1000)
-    score_fn  = get_score_fn(score_sde, model, params, train=False, continuous=continuous)
+    # Fix the starting noise — same z for every tolerance level
+    rng = jax.random.PRNGKey(args.seed)
+    rng, k = jax.random.split(rng)
+    z = sde.prior_sampling(k, shape)
+    print(f"Fixed prior noise z: shape={z.shape}")
 
-    shape = (N_ROWS, H, H, C)
-    cols  = []
+    all_imgs = []   # (n_tol, N_IMAGES, H, H, C)
+    nfe_log  = []
 
-    for N in NFES:
-        print(f"NFE={N} ...", flush=True)
-        sde     = VESDE(sigma_min, sigma_max, N)
-        pred    = ProbabilityFlowPredictor(sde, score_fn)
-        sampler = make_sampler(sde, shape, pred, inv_scaler)
-
+    for label, rtol, atol in TOL_CONFIGS:
+        print(f"\nODE  {label}  rtol={rtol}  atol={atol} …", flush=True)
+        sampler_fn = ode_sampler(sde, score_fn, shape, inverse_scaler,
+                                 rtol=rtol, atol=atol, eps=eps)
         rng, k = jax.random.split(rng)
-        sampler(k).block_until_ready()       # JIT warm-up
-        rng, k = jax.random.split(rng)
-        imgs = np.clip(np.array(sampler(k)), 0.0, 1.0)
-        cols.append(imgs)
-        print(f"  done", flush=True)
+        imgs, nfe = sampler_fn(k, z=z)
+        imgs = np.clip(np.array(imgs).reshape(N_IMAGES, H, H, C), 0.0, 1.0).astype(np.float32)
+        all_imgs.append(imgs)
+        nfe_log.append((label, nfe))
+        print(f"  NFE={nfe}  done.", flush=True)
 
-    fig, axes = plt.subplots(N_ROWS, len(NFES), figsize=(len(NFES) * 3, N_ROWS * 3))
-    for col, (N, imgs) in enumerate(zip(NFES, cols)):
-        for row in range(N_ROWS):
+    all_imgs = np.stack(all_imgs, axis=0)   # (n_tol, N_IMAGES, H, H, C)
+    np.save(str(out / 'nfe_sweep.npy'), all_imgs)
+    print(f"\nSaved {out}/nfe_sweep.npy  shape={all_imgs.shape}")
+
+    # ── NFE log ───────────────────────────────────────────────────────────────
+    log_lines = [f"{lbl}  NFE={nfe}" for lbl, nfe in nfe_log]
+    (out / 'nfe_log.txt').write_text('\n'.join(log_lines) + '\n')
+    print('\n'.join(log_lines))
+
+    # ── Grid PNG: rows = images, cols = tolerance levels ─────────────────────
+    n_tol = len(TOL_CONFIGS)
+    fig, axes = plt.subplots(N_IMAGES, n_tol,
+                             figsize=(n_tol * 2, N_IMAGES * 2))
+    for col, (label, rtol, atol) in enumerate(TOL_CONFIGS):
+        nfe_val = nfe_log[col][1]
+        axes[0, col].set_title(f"{label}\nNFE={nfe_val}", fontsize=7)
+        for row in range(N_IMAGES):
             ax = axes[row, col]
-            ax.imshow(imgs[row])
+            img = all_imgs[col, row]
+            ax.imshow(img if C == 3 else img[..., 0], cmap=None if C == 3 else 'gray')
             ax.axis('off')
-            if row == 0:
-                ax.set_title(f'NFE = {N}', fontsize=12)
 
     plt.tight_layout()
-    plt.savefig(out, dpi=150, bbox_inches='tight')
-    print(f"Saved -> {out}")
+    grid_path = out / f'nfe_sweep_grid_{args.seed}.png'
+    plt.savefig(str(grid_path), dpi=300, bbox_inches='tight')
+    print(f"Saved {grid_path}")
 
 
 if __name__ == '__main__':

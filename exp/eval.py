@@ -22,6 +22,9 @@ import orbax.checkpoint as ocp
 import tensorflow as tf
 import tensorflow_hub as tfhub
 
+# Keep TF (Inception) on CPU — JAX pre-allocates most GPU memory.
+tf.config.set_visible_devices([], 'GPU')
+
 from config import get_config
 from sde import get_sde
 from utils import batch_mul
@@ -564,6 +567,10 @@ def main():
             print(f"  Generated in {elapsed:.0f}s")
 
             save_grid(samples[:GRID_N], out_dir / 'grid.png', nrow=8)
+
+            samples_file = out_dir / 'samples.npz'
+            np.savez_compressed(samples_file, samples=samples)
+            print(f"  Saved samples → {samples_file}")
 
             print("  Running Inception …")
             gen_pool3, gen_logits = run_inception(to_uint8(samples), inception_model)
