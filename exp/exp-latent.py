@@ -232,7 +232,7 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
     flierprops = dict(marker='D', markersize=2.5, linestyle='none',
                       markerfacecolor='#aaa', markeredgecolor='#aaa', alpha=0.5)
-    fig, ax = plt.subplots(figsize=(6.5, 2.6))
+    fig, ax = plt.subplots(figsize=(5.5, 3.8))
     bp = ax.boxplot(
         [diffs_shuf, diffs_real],
         tick_labels=["Shuffled baseline", "Model A vs B"],
@@ -244,6 +244,9 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     bp['boxes'][1].set_facecolor("#FFAAAA"); bp['boxes'][1].set_alpha(0.9)   # pastel red
     ax.set_xlabel("$|z^A_i - z^B_i|$")
     ax.set_title("Dimension-wise encoding differences", fontsize=11)
+    ax.set_xticks([0, 100, 200, 300])
+    ax.set_axisbelow(True)
+    ax.xaxis.grid(True, color='grey', alpha=0.3, linewidth=0.8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     fig.tight_layout()
@@ -272,23 +275,27 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
         for d in range(D)
     ])
 
-    fig, ax = plt.subplots(figsize=(5.5, 4))
+    fig, ax = plt.subplots(figsize=(5.5, 3.8))
 
     ax.hist(r_per_dim, bins=50, range=(0, 1), color="#D32F2F", alpha=0.9, rwidth=1/1.2)
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
     ax.set_xticks([0.00, 0.25, 0.50, 0.75, 1.00])
+    ax.set_yticks([0, 200, 400, 600])
     ax.set_title("Dimension-wise correlation coefficients", fontsize=11)
+    ax.set_axisbelow(True)
+    ax.xaxis.grid(True, color='grey', alpha=0.3, linewidth=0.8)
+    ax.yaxis.grid(True, color='grey', alpha=0.3, linewidth=0.8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     # ── inset: one fixed dimension, 16 images ────────────────────────────
-    ax_inset = ax.inset_axes([0.24, 0.22, 0.32, 0.34])
+    ax_inset = ax.inset_axes([0.22, 0.20, 0.40, 0.40])   # square, slightly bigger
     zA = codes_A[:, dim_idx]   # (n_images,)
     zB = codes_B[:, dim_idx]   # (n_images,)
     r_img, _ = pearsonr(zA, zB)
 
-    ax_inset.scatter(zA, zB, s=16, color="#C62828", alpha=0.8, linewidths=0)
+    ax_inset.scatter(zA, zB, s=22, color="#C62828", alpha=0.8, linewidths=0)
     lims = [min(zA.min(), zB.min()), max(zA.max(), zB.max())]
     ax_inset.plot(lims, lims, "k--", lw=0.8)
     ax_inset.set_xlabel("Model A", fontsize=7)
@@ -298,8 +305,11 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
                   fontsize=7, ha="right", va="bottom")
     ax_inset.set_xticks([])
     ax_inset.set_yticks([])
-    ax_inset.spines["top"].set_visible(False)
-    ax_inset.spines["right"].set_visible(False)
+    for spine in ax_inset.spines.values():
+        spine.set_visible(True)
+        spine.set_edgecolor('#aaa')
+        spine.set_alpha(0.6)
+        spine.set_linewidth(0.8)
 
     fig.tight_layout()
     if save_path:
