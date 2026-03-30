@@ -208,6 +208,8 @@ def fig7_dimension_overlay(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.set_title(
         f"Latent code comparison (first {n_dims} dims, $r={r:.3f}$)",
         fontsize=11)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, bbox_inches="tight")
@@ -217,11 +219,13 @@ def fig7_dimension_overlay(codes_A: np.ndarray, codes_B: np.ndarray,
 
 
 def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
-                                bins: int = 40,
+                                bins: int = 60,
                                 save_path: str | None = None):
     """
     Fig 8 (left): histogram of |z_A − z_B| per dimension across all images,
     compared to a shuffled baseline (random pairing of dimensions).
+
+    Both arrays are fully flattened → n_images * D values each.
     """
     diffs_real = np.abs(codes_A - codes_B).flatten()
 
@@ -242,6 +246,8 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.set_ylabel("Count")
     ax.legend()
     ax.set_title("Dimension-wise encoding differences", fontsize=11)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, bbox_inches="tight")
@@ -251,28 +257,57 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
 
 def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
-                                  bins: int = 20,
-                                  save_path: str | None = None):
+                                 image_idx: int = 0,
+                                 bins: int = 60,
+                                 save_path: str | None = None):
     """
-    Fig 8 (right): histogram of per-image Pearson r between Model A and B
-    latent codes across all n_images images.
-    """
-    r_vals = np.array([
-        pearsonr(codes_A[i], codes_B[i])[0]
-        for i in range(codes_A.shape[0])
-    ])
-    mean_r = r_vals.mean()
+    Fig 8 (right): histogram of dimension-wise Pearson r, with an inset
+    scatter of Model A vs Model B latent values for one image.
 
-    fig, ax = plt.subplots(figsize=(5.5, 3.5))
-    ax.hist(r_vals, bins=bins, range=(0.0, 1.0),
-            color=COLOR_B, alpha=0.80)
-    ax.axvline(mean_r, color=COLOR_A, lw=1.5, linestyle="--",
-               label=f"$\\bar{{r}} = {mean_r:.3f}$")
-    ax.set_xlabel("Correlation coefficient $r$")
+    The r values are computed PER DIMENSION across all n_images images:
+        r_d = pearsonr(codes_A[:, d], codes_B[:, d])   for d in 0..D-1
+    This yields D = 3072 values for CIFAR-10, giving a well-populated
+    histogram that matches the paper (counts up to ~600).
+
+    The inset scatter uses ALL D dimensions of one image, one dot per dim.
+    """
+    n_images, D = codes_A.shape
+
+    # ── dimension-wise r: shape (D,) ─────────────────────────────────────
+    # Each r_d measures how consistently dimension d encodes the same value
+    # across models, over the n_images images.
+    r_per_dim = np.array([
+        pearsonr(codes_A[:, d], codes_B[:, d])[0]
+        for d in range(D)
+    ])
+    mean_r = r_per_dim.mean()
+
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+
+    # Main: histogram of dimension-wise r values
+    ax.hist(r_per_dim, bins=bins, color="#D32F2F", alpha=0.9)
+    ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
-    ax.set_xlim(0.0, 1.0)
-    ax.legend()
-    ax.set_title("Per-image correlation coefficients", fontsize=11)
+    ax.set_title("Dimension-wise correlation coefficients", fontsize=11)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # ── inset: scatter of z_A vs z_B for one image (all D dims) ──────────
+    ax_inset = ax.inset_axes([0.05, 0.45, 0.45, 0.50])  # [x, y, w, h]
+    zA = codes_A[image_idx]   # (D,)
+    zB = codes_B[image_idx]   # (D,)
+    r_img, _ = pearsonr(zA, zB)
+
+    ax_inset.scatter(zA, zB, s=4, color="#C62828", alpha=0.4, linewidths=0)
+    lims = [min(zA.min(), zB.min()), max(zA.max(), zB.max())]
+    ax_inset.plot(lims, lims, "k--", lw=0.8)
+    ax_inset.set_xlabel("Model A", fontsize=8)
+    ax_inset.set_ylabel("Model B", fontsize=8)
+    ax_inset.set_title(f"$x_1(T)$\n$r={r_img:.2f}$", fontsize=8)
+    ax_inset.tick_params(labelsize=7)
+    ax_inset.spines["top"].set_visible(False)
+    ax_inset.spines["right"].set_visible(False)
+
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, bbox_inches="tight")
@@ -287,6 +322,8 @@ def all_three_panels(codes_A: np.ndarray, codes_B: np.ndarray,
     """
     Draw all three panels in a single figure (matches paper layout).
     """
+    n_images, D = codes_A.shape
+
     zA_single = codes_A[image_idx, :100]
     zB_single = codes_B[image_idx, :100]
     r_single, _ = pearsonr(zA_single, zB_single)
@@ -296,11 +333,12 @@ def all_three_panels(codes_A: np.ndarray, codes_B: np.ndarray,
     codes_B_shuf = np.stack([rng.permutation(row) for row in codes_B])
     diffs_shuf   = np.abs(codes_A - codes_B_shuf).flatten()
 
-    r_vals = np.array([
-        pearsonr(codes_A[i], codes_B[i])[0]
-        for i in range(codes_A.shape[0])
+    # Dimension-wise r: D values, one per latent dimension
+    r_per_dim = np.array([
+        pearsonr(codes_A[:, d], codes_B[:, d])[0]
+        for d in range(D)
     ])
-    mean_r = r_vals.mean()
+    mean_r = r_per_dim.mean()
 
     fig = plt.figure(figsize=(13, 3.6))
     gs  = gridspec.GridSpec(1, 3, figure=fig, wspace=0.35)
@@ -335,19 +373,34 @@ def all_three_panels(codes_A: np.ndarray, codes_B: np.ndarray,
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
-    # ── panel 3: correlation histogram ───────────────────────────────────
+    # ── panel 3: dimension-wise correlation histogram + inset scatter ─────
     ax3 = fig.add_subplot(gs[2])
-    ax3.hist(r_vals, bins=20, range=(0.0, 1.0),
-             color=COLOR_B, alpha=0.80)
+    ax3.hist(r_per_dim, bins=60, color=COLOR_B, alpha=0.80)
     ax3.axvline(mean_r, color=COLOR_A, lw=1.5, linestyle="--",
                 label=f"$\\bar{{r}}={mean_r:.3f}$")
-    ax3.set_xlabel("Correlation coefficient $r$")
+    ax3.set_xlabel("Correlation Coefficient")
     ax3.set_ylabel("Count")
-    ax3.set_xlim(0.0, 1.0)
     ax3.legend(fontsize=9)
-    ax3.set_title("Per-image correlation coefficients", fontsize=10)
+    ax3.set_title("Dimension-wise correlation coefficients", fontsize=10)
     ax3.spines["top"].set_visible(False)
     ax3.spines["right"].set_visible(False)
+
+    # Inset scatter: all D dims of one image
+    ax_inset = ax3.inset_axes([0.05, 0.45, 0.42, 0.50])
+    zA_img = codes_A[image_idx]
+    zB_img = codes_B[image_idx]
+    r_img, _ = pearsonr(zA_img, zB_img)
+    ax_inset.scatter(zA_img, zB_img, s=2, color="#C62828",
+                     alpha=0.35, linewidths=0)
+    lims = [min(zA_img.min(), zB_img.min()),
+            max(zA_img.max(), zB_img.max())]
+    ax_inset.plot(lims, lims, "k--", lw=0.8)
+    ax_inset.set_xlabel("Model A", fontsize=7)
+    ax_inset.set_ylabel("Model B", fontsize=7)
+    ax_inset.set_title(f"$x_1(T)$  $r={r_img:.2f}$", fontsize=7)
+    ax_inset.tick_params(labelsize=6)
+    ax_inset.spines["top"].set_visible(False)
+    ax_inset.spines["right"].set_visible(False)
 
     if save_path:
         fig.savefig(save_path, bbox_inches="tight")
@@ -424,6 +477,7 @@ def main():
         save_path=os.path.join(out, "fig8a_diff_hist.png"))
     fig8b_correlation_histogram(
         codes_A, codes_B,
+        image_idx=args.image_idx,
         save_path=os.path.join(out, "fig8b_corr_hist.png"))
 
 
