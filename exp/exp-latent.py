@@ -230,15 +230,18 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     codes_B_shuf = np.stack([rng.permutation(row) for row in codes_B])
     diffs_shuf   = np.abs(codes_A - codes_B_shuf).flatten()
 
-    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+    flierprops = dict(marker='D', markersize=2.5, linestyle='none',
+                      markerfacecolor='#aaa', markeredgecolor='#aaa', alpha=0.5)
+    fig, ax = plt.subplots(figsize=(6.5, 2.6))
     bp = ax.boxplot(
         [diffs_real, diffs_shuf],
         tick_labels=["Model A vs B", "Shuffled baseline"],
-        patch_artist=True, widths=0.5,
+        patch_artist=True, widths=0.28,
+        vert=False, flierprops=flierprops,
     )
-    bp['boxes'][0].set_facecolor(COLOR_A);   bp['boxes'][0].set_alpha(0.75)
-    bp['boxes'][1].set_facecolor(COLOR_SHF); bp['boxes'][1].set_alpha(0.75)
-    ax.set_ylabel("$|z^A_i - z^B_i|$")
+    bp['boxes'][0].set_facecolor("#FFAAAA"); bp['boxes'][0].set_alpha(0.9)   # pastel red
+    bp['boxes'][1].set_facecolor("#AAC4FF"); bp['boxes'][1].set_alpha(0.9)   # pastel blue
+    ax.set_xlabel("$|z^A_i - z^B_i|$")
     ax.set_title("Dimension-wise encoding differences", fontsize=11)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -271,7 +274,7 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
     fig, ax = plt.subplots(figsize=(5.5, 4))
 
-    ax.hist(r_per_dim, bins=bins, color="#D32F2F", alpha=0.9)
+    ax.hist(r_per_dim, bins=bins, color="#D32F2F", alpha=0.9, rwidth=0.82)
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
     ax.set_xticks([0.00, 0.25, 0.75, 1.00])
@@ -280,20 +283,21 @@ def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     ax.spines["right"].set_visible(False)
 
     # ── inset: one fixed dimension, 16 images ────────────────────────────
-    ax_inset = ax.inset_axes([0.22, 0.20, 0.44, 0.46])  # lower + more right
+    ax_inset = ax.inset_axes([0.24, 0.22, 0.32, 0.34])
     zA = codes_A[:, dim_idx]   # (n_images,)
     zB = codes_B[:, dim_idx]   # (n_images,)
     r_img, _ = pearsonr(zA, zB)
 
-    ax_inset.scatter(zA, zB, s=18, color="#C62828", alpha=0.8, linewidths=0)
+    ax_inset.scatter(zA, zB, s=16, color="#C62828", alpha=0.8, linewidths=0)
     lims = [min(zA.min(), zB.min()), max(zA.max(), zB.max())]
     ax_inset.plot(lims, lims, "k--", lw=0.8)
-    ax_inset.set_xlabel("Model A", fontsize=8)
-    ax_inset.set_ylabel("Model B", fontsize=8)
-    ax_inset.set_title(f"$x_1(T)$", fontsize=8)
+    ax_inset.set_xlabel("Model A", fontsize=7)
+    ax_inset.set_ylabel("Model B", fontsize=7)
+    ax_inset.set_title(f"$x_1(T)$", fontsize=7)
     ax_inset.text(0.97, 0.05, f"$r={r_img:.2f}$", transform=ax_inset.transAxes,
-                  fontsize=8, ha="right", va="bottom")
-    ax_inset.tick_params(labelsize=7)
+                  fontsize=7, ha="right", va="bottom")
+    ax_inset.set_xticks([])
+    ax_inset.set_yticks([])
     ax_inset.spines["top"].set_visible(False)
     ax_inset.spines["right"].set_visible(False)
 
