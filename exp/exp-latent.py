@@ -219,32 +219,26 @@ def fig7_dimension_overlay(codes_A: np.ndarray, codes_B: np.ndarray,
 
 
 def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
-                                bins: int = 60,
                                 save_path: str | None = None):
     """
-    Fig 8 (left): histogram of |z_A − z_B| per dimension across all images,
+    Fig 8 (left): box plot of |z_A − z_B| per dimension across all images,
     compared to a shuffled baseline (random pairing of dimensions).
-
-    Both arrays are fully flattened → n_images * D values each.
     """
     diffs_real = np.abs(codes_A - codes_B).flatten()
 
-    # Shuffled baseline: randomly permute B's dimensions per image
     rng = np.random.default_rng(seed=0)
     codes_B_shuf = np.stack([rng.permutation(row) for row in codes_B])
     diffs_shuf   = np.abs(codes_A - codes_B_shuf).flatten()
 
-    max_val   = max(diffs_real.max(), diffs_shuf.max())
-    bin_edges = np.linspace(0, max_val, bins + 1)
-
     fig, ax = plt.subplots(figsize=(5.5, 3.5))
-    ax.hist(diffs_real, bins=bin_edges,
-            color=COLOR_A, alpha=0.75, label="Model A vs B")
-    ax.hist(diffs_shuf, bins=bin_edges,
-            color=COLOR_SHF, alpha=0.55, label="Shuffled baseline")
-    ax.set_xlabel("$|z^A_i - z^B_i|$")
-    ax.set_ylabel("Count")
-    ax.legend()
+    bp = ax.boxplot(
+        [diffs_real, diffs_shuf],
+        labels=["Model A vs B", "Shuffled baseline"],
+        patch_artist=True, widths=0.5,
+    )
+    bp['boxes'][0].set_facecolor(COLOR_A);   bp['boxes'][0].set_alpha(0.75)
+    bp['boxes'][1].set_facecolor(COLOR_SHF); bp['boxes'][1].set_alpha(0.75)
+    ax.set_ylabel("$|z^A_i - z^B_i|$")
     ax.set_title("Dimension-wise encoding differences", fontsize=11)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -257,53 +251,48 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
 
 
 def fig8b_correlation_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
-                                 image_idx: int = 0,
-                                 bins: int = 60,
+                                 dim_idx: int = 0,
+                                 bins: int = 50,
                                  save_path: str | None = None):
     """
     Fig 8 (right): histogram of dimension-wise Pearson r, with an inset
-    scatter of Model A vs Model B latent values for one image.
+    scatter of Model A vs Model B for one fixed dimension across all images.
 
-    The r values are computed PER DIMENSION across all n_images images:
-        r_d = pearsonr(codes_A[:, d], codes_B[:, d])   for d in 0..D-1
-    This yields D = 3072 values for CIFAR-10, giving a well-populated
-    histogram that matches the paper (counts up to ~600).
-
-    The inset scatter uses ALL D dimensions of one image, one dot per dim.
+    Main histogram: r_d = pearsonr(codes_A[:, d], codes_B[:, d]) for d in 0..D-1
+    Inset scatter:  codes_A[:, dim_idx] vs codes_B[:, dim_idx] — 16 points,
+                    one per image, for the single dimension dim_idx.
     """
     n_images, D = codes_A.shape
 
-    # ── dimension-wise r: shape (D,) ─────────────────────────────────────
-    # Each r_d measures how consistently dimension d encodes the same value
-    # across models, over the n_images images.
     r_per_dim = np.array([
         pearsonr(codes_A[:, d], codes_B[:, d])[0]
         for d in range(D)
     ])
-    mean_r = r_per_dim.mean()
 
     fig, ax = plt.subplots(figsize=(5.5, 4))
 
-    # Main: histogram of dimension-wise r values
     ax.hist(r_per_dim, bins=bins, color="#D32F2F", alpha=0.9)
     ax.set_xlabel("Correlation Coefficient")
     ax.set_ylabel("Count")
+    ax.set_xticks([0.00, 0.25, 0.75, 1.00])
     ax.set_title("Dimension-wise correlation coefficients", fontsize=11)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # ── inset: scatter of z_A vs z_B for one image (all D dims) ──────────
-    ax_inset = ax.inset_axes([0.05, 0.45, 0.45, 0.50])  # [x, y, w, h]
-    zA = codes_A[image_idx]   # (D,)
-    zB = codes_B[image_idx]   # (D,)
+    # ── inset: one fixed dimension, 16 images ────────────────────────────
+    ax_inset = ax.inset_axes([0.22, 0.20, 0.44, 0.46])  # lower + more right
+    zA = codes_A[:, dim_idx]   # (n_images,)
+    zB = codes_B[:, dim_idx]   # (n_images,)
     r_img, _ = pearsonr(zA, zB)
 
-    ax_inset.scatter(zA, zB, s=4, color="#C62828", alpha=0.4, linewidths=0)
+    ax_inset.scatter(zA, zB, s=18, color="#C62828", alpha=0.8, linewidths=0)
     lims = [min(zA.min(), zB.min()), max(zA.max(), zB.max())]
     ax_inset.plot(lims, lims, "k--", lw=0.8)
     ax_inset.set_xlabel("Model A", fontsize=8)
     ax_inset.set_ylabel("Model B", fontsize=8)
-    ax_inset.set_title(f"$x_1(T)$\n$r={r_img:.2f}$", fontsize=8)
+    ax_inset.set_title(f"$x_1(T)$", fontsize=8)
+    ax_inset.text(0.97, 0.05, f"$r={r_img:.2f}$", transform=ax_inset.transAxes,
+                  fontsize=8, ha="right", va="bottom")
     ax_inset.tick_params(labelsize=7)
     ax_inset.spines["top"].set_visible(False)
     ax_inset.spines["right"].set_visible(False)
@@ -353,8 +342,9 @@ def all_three_panels(codes_A: np.ndarray, codes_B: np.ndarray,
     ax1.set_ylabel("Latent value")
     ax1.set_xlim(0, 99)
     ax1.legend(fontsize=9)
-    ax1.set_title(f"Latent code comparison (first 100 dims, $r={r_single:.3f}$)",
+    ax1.set_title(f"Latent code comparison (first 100 dims)$)",
                   fontsize=10)
+    print(f"Single-image r (first 100 dims): {r_single:.3f}")
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
 
@@ -375,7 +365,7 @@ def all_three_panels(codes_A: np.ndarray, codes_B: np.ndarray,
 
     # ── panel 3: dimension-wise correlation histogram + inset scatter ─────
     ax3 = fig.add_subplot(gs[2])
-    ax3.hist(r_per_dim, bins=60, color=COLOR_B, alpha=0.80)
+    ax3.hist(r_per_dim, bins=50, color=COLOR_B, alpha=0.80)
     ax3.axvline(mean_r, color=COLOR_A, lw=1.5, linestyle="--",
                 label=f"$\\bar{{r}}={mean_r:.3f}$")
     ax3.set_xlabel("Correlation Coefficient")
