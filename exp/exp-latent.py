@@ -233,7 +233,7 @@ def fig8a_difference_histogram(codes_A: np.ndarray, codes_B: np.ndarray,
     fig, ax = plt.subplots(figsize=(5.5, 3.5))
     bp = ax.boxplot(
         [diffs_real, diffs_shuf],
-        labels=["Model A vs B", "Shuffled baseline"],
+        tick_labels=["Model A vs B", "Shuffled baseline"],
         patch_artist=True, widths=0.5,
     )
     bp['boxes'][0].set_facecolor(COLOR_A);   bp['boxes'][0].set_alpha(0.75)
@@ -467,7 +467,6 @@ def main():
         save_path=os.path.join(out, "fig8a_diff_hist.png"))
     fig8b_correlation_histogram(
         codes_A, codes_B,
-        image_idx=args.image_idx,
         save_path=os.path.join(out, "fig8b_corr_hist.png"))
 
 
