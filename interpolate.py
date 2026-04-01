@@ -61,6 +61,29 @@ def slerp(z1, z2, alpha):
     return (coeff1 * z1_flat + coeff2 * z2_flat).reshape(z1.shape)
 
 
+def tweedie_interp(z1, z2, alpha, score_fn, sde, rng):
+    """Tweedie denoising + re-noising interpolation.
+
+    For VE SDE at t=T: p_T(z | x_0) = N(x_0, σ_max² I), so the Tweedie
+    posterior mean estimate is  x̂_0 = z + σ_max² · s_θ(z, T).
+
+    Steps:
+      1. Estimate x̂_0 for each latent via Tweedie's formula.
+      2. Linear-interpolate in estimated image space.
+      3. Re-add fresh independent noise → valid VE latent at t=T.
+    """
+    sigma_max = sde.sigma_max
+    vec_T = jnp.full((1,), sde.T)
+
+    x0_1 = z1 + sigma_max ** 2 * score_fn(z1, vec_T)
+    x0_2 = z2 + sigma_max ** 2 * score_fn(z2, vec_T)
+
+    x0_alpha = (1.0 - alpha) * x0_1 + alpha * x0_2
+
+    noise = jax.random.normal(rng, z1.shape)
+    return x0_alpha + sigma_max * noise
+
+
 def save_grid(imgs, path, nrow):
     """Save float32 [0,1] (N,H,W,C) images as a single-row PNG grid."""
     n, H, W, C = imgs.shape
@@ -87,6 +110,8 @@ def main():
     parser.add_argument('--seed',     type=int, default=0,
                         help='Shuffle seed for --n_celeba')
     parser.add_argument('--variant', choices=['disc', 'cont'], default='disc')
+    parser.add_argument('--interp_method', choices=['slerp', 'tweedie'], default='slerp',
+                        help='Interpolation method: slerp (spherical) or tweedie (denoising+re-noising)')
     parser.add_argument('--show_originals', action='store_true', default=False,
                         help='Prepend/append original images to each row for reference')
     args = parser.parse_args()
@@ -181,17 +206,18 @@ def main():
         z1 = encode(x1)  # (1, H, H, C) at t=T
         z2 = encode(x2)
 
-        # Slerp between the two latent codes
-        alphas   = np.linspace(0.0, 1.0, args.n_interp)
-        z_interp = jnp.stack(
-            [slerp(z1[0], z2[0], float(a)) for a in alphas], axis=0
-        )  # (n_interp, H, H, C)
-
-        # Decode each interpolated latent back to image space
-        print(f"  Decoding {args.n_interp} latents …")
+        # Interpolate between the two latent codes and decode
+        alphas = np.linspace(0.0, 1.0, args.n_interp)
+        print(f"  Interpolating ({args.interp_method}) and decoding {args.n_interp} latents …")
         imgs_list = []
-        for i in range(args.n_interp):
-            img = decode(z_interp[i:i+1])
+        for i, a in enumerate(alphas):
+            alpha = float(a)
+            if args.interp_method == 'slerp':
+                z_a = slerp(z1[0], z2[0], alpha)[None]
+            else:  # tweedie
+                rng = jax.random.PRNGKey(args.seed * 10000 + pair_idx * 1000 + i)
+                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde, rng)
+            img = decode(z_a)
             imgs_list.append(np.clip(np.array(img), 0, 1))
             print(f"    step {i+1}/{args.n_interp}")
         imgs = np.concatenate(imgs_list, axis=0)  # (n_interp, H, H, C)
