@@ -61,31 +61,34 @@ def slerp(z1, z2, alpha):
     return (coeff1 * z1_flat + coeff2 * z2_flat).reshape(z1.shape)
 
 
-def tweedie_interp(z1, z2, alpha, score_fn, sde, t_enc):
-    """Tweedie denoising + component-wise slerp interpolation.
+def tweedie_denoise(z1, z2, score_fn, sde, t_enc):
+    """Compute Tweedie x̂_0 estimates and noise residuals for both endpoints.
 
     For VE SDE at t_enc: p_{t_enc}(z | x_0) = N(x_0, σ(t_enc)² I), so the
     Tweedie posterior mean estimate is  x̂_0 = z + σ(t_enc)² · s_θ(z, t_enc).
-
-    Steps:
-      1. Estimate x̂_0 for each latent via Tweedie's formula at t_enc.
-      2. Extract pure noise residuals: ε = (z - x̂_0) / σ(t_enc).
-      3. Linear-interpolate the image components.
-      4. Slerp the noise residuals independently.
-      5. Recombine: z_α = x̂_0^(α) + σ(t_enc) · ε_α.
+    Returns components that are independent of alpha — call once per pair.
     """
     vec_t = jnp.full((1,), t_enc)
     _, sigma_t = sde.marginal_prob(z1, t_enc)  # scalar σ(t_enc)
 
     x0_1 = z1 + sigma_t ** 2 * score_fn(z1, vec_t)
     x0_2 = z2 + sigma_t ** 2 * score_fn(z2, vec_t)
+    eps1  = (z1 - x0_1) / sigma_t
+    eps2  = (z2 - x0_2) / sigma_t
 
-    eps1 = (z1 - x0_1) / sigma_t
-    eps2 = (z2 - x0_2) / sigma_t
+    return x0_1, x0_2, eps1, eps2, sigma_t
 
+
+def tweedie_blend(x0_1, x0_2, eps1, eps2, sigma_t, alpha):
+    """Blend pre-computed Tweedie components at interpolation weight alpha.
+
+    Steps:
+      1. Linear-interpolate the image components.
+      2. Slerp the noise residuals independently.
+      3. Recombine: z_α = x̂_0^(α) + σ(t_enc) · ε_α.
+    """
     x0_alpha  = (1.0 - alpha) * x0_1 + alpha * x0_2
     eps_alpha = slerp(eps1[0], eps2[0], alpha)[None]
-
     return x0_alpha + sigma_t * eps_alpha
 
 
@@ -214,19 +217,21 @@ def main():
 
         # Encode both images into the latent space
         print("  Encoding …")
-        z1 = encode(x1)  # (1, H, H, C) at t=T
+        z1 = encode(x1)  # (1, H, H, C) at t=t_enc
         z2 = encode(x2)
 
         # Interpolate between the two latent codes and decode
         alphas = np.linspace(0.0, 1.0, args.n_interp)
         print(f"  Interpolating ({args.interp_method}) and decoding {args.n_interp} latents …")
+        if args.interp_method == 'tweedie':
+            tweedie_components = tweedie_denoise(z1, z2, score_fn, sde, t_enc)
         imgs_list = []
         for i, a in enumerate(alphas):
             alpha = float(a)
             if args.interp_method == 'slerp':
                 z_a = slerp(z1[0], z2[0], alpha)[None]
             else:  # tweedie
-                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde, t_enc)
+                z_a = tweedie_blend(*tweedie_components, alpha)
             img = decode(z_a)
             imgs_list.append(np.clip(np.array(img), 0, 1))
             print(f"    step {i+1}/{args.n_interp}")
