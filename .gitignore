@@ -60,3 +60,6 @@ slurm/
 *.log
 *.out
 runs/
+wsl_env/
+assets/
+*.ipynb
