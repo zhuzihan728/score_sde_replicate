@@ -61,32 +61,32 @@ def slerp(z1, z2, alpha):
     return (coeff1 * z1_flat + coeff2 * z2_flat).reshape(z1.shape)
 
 
-def tweedie_interp(z1, z2, alpha, score_fn, sde):
+def tweedie_interp(z1, z2, alpha, score_fn, sde, t_enc):
     """Tweedie denoising + component-wise slerp interpolation.
 
-    For VE SDE at t=T: p_T(z | x_0) = N(x_0, σ_max² I), so the Tweedie
-    posterior mean estimate is  x̂_0 = z + σ_max² · s_θ(z, T).
+    For VE SDE at t_enc: p_{t_enc}(z | x_0) = N(x_0, σ(t_enc)² I), so the
+    Tweedie posterior mean estimate is  x̂_0 = z + σ(t_enc)² · s_θ(z, t_enc).
 
     Steps:
-      1. Estimate x̂_0 for each latent via Tweedie's formula.
-      2. Extract pure noise residuals: ε = (z - x̂_0) / σ_max.
+      1. Estimate x̂_0 for each latent via Tweedie's formula at t_enc.
+      2. Extract pure noise residuals: ε = (z - x̂_0) / σ(t_enc).
       3. Linear-interpolate the image components.
       4. Slerp the noise residuals independently.
-      5. Recombine: z_α = x̂_0^(α) + σ_max · ε_α.
+      5. Recombine: z_α = x̂_0^(α) + σ(t_enc) · ε_α.
     """
-    sigma_max = sde.sigma_max
-    vec_T = jnp.full((1,), sde.T)
+    vec_t = jnp.full((1,), t_enc)
+    _, sigma_t = sde.marginal_prob(z1, t_enc)  # scalar σ(t_enc)
 
-    x0_1 = z1 + sigma_max ** 2 * score_fn(z1, vec_T)
-    x0_2 = z2 + sigma_max ** 2 * score_fn(z2, vec_T)
+    x0_1 = z1 + sigma_t ** 2 * score_fn(z1, vec_t)
+    x0_2 = z2 + sigma_t ** 2 * score_fn(z2, vec_t)
 
-    eps1 = (z1 - x0_1) / sigma_max
-    eps2 = (z2 - x0_2) / sigma_max
+    eps1 = (z1 - x0_1) / sigma_t
+    eps2 = (z2 - x0_2) / sigma_t
 
     x0_alpha  = (1.0 - alpha) * x0_1 + alpha * x0_2
     eps_alpha = slerp(eps1[0], eps2[0], alpha)[None]
 
-    return x0_alpha + sigma_max * eps_alpha
+    return x0_alpha + sigma_t * eps_alpha
 
 
 def save_grid(imgs, path, nrow):
@@ -117,6 +117,9 @@ def main():
     parser.add_argument('--variant', choices=['disc', 'cont'], default='disc')
     parser.add_argument('--interp_method', choices=['slerp', 'tweedie'], default='slerp',
                         help='Interpolation method: slerp (spherical) or tweedie (denoising+re-noising)')
+    parser.add_argument('--t_enc', type=float, default=None,
+                        help='Encoding time in [0, T]; defaults to sde.T (full noise). '
+                             'Use e.g. 0.5 to encode only halfway.')
     parser.add_argument('--show_originals', action='store_true', default=False,
                         help='Prepend/append original images to each row for reference')
     args = parser.parse_args()
@@ -132,6 +135,9 @@ def main():
     sde, eps = get_sde(config)
     scaler         = get_data_scaler(config.data.centered)
     inverse_scaler = get_data_inverse_scaler(config.data.centered)
+
+    t_enc = args.t_enc if args.t_enc is not None else sde.T
+    print(f"Encoding time t_enc={t_enc:.4f}  (sde.T={sde.T})")
 
     print(f"Loading {ckpt_path} …")
     model, ema_params = load_ckpt(ckpt_path, config)
@@ -151,18 +157,18 @@ def main():
         return np.array(drift_fn(x_r, vec_t)).reshape(-1)
 
     def encode(x):
-        """Real image → latent: integrate probability-flow ODE forward (ε → T)."""
+        """Real image → latent: integrate probability-flow ODE forward (ε → t_enc)."""
         sol = integrate.solve_ivp(
-            ode_fn, (eps, sde.T), np.array(x).reshape(-1),
+            ode_fn, (eps, t_enc), np.array(x).reshape(-1),
             method='RK45', rtol=args.rtol, atol=args.atol
         )
         print(f"    encode NFE: {sol.nfev}")
         return jnp.asarray(sol.y[:, -1]).reshape(shape)
 
     def decode(z):
-        """Latent → image: integrate probability-flow ODE backward (T → ε)."""
+        """Latent → image: integrate probability-flow ODE backward (t_enc → ε)."""
         sol = integrate.solve_ivp(
-            ode_fn, (sde.T, eps), np.array(z).reshape(-1),
+            ode_fn, (t_enc, eps), np.array(z).reshape(-1),
             method='RK45', rtol=args.rtol, atol=args.atol
         )
         print(f"    decode NFE: {sol.nfev}")
@@ -220,7 +226,7 @@ def main():
             if args.interp_method == 'slerp':
                 z_a = slerp(z1[0], z2[0], alpha)[None]
             else:  # tweedie
-                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde)
+                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde, t_enc)
             img = decode(z_a)
             imgs_list.append(np.clip(np.array(img), 0, 1))
             print(f"    step {i+1}/{args.n_interp}")
