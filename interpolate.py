@@ -123,6 +123,8 @@ def main():
     parser.add_argument('--t_enc', type=float, default=None,
                         help='Encoding time in [0, T]; defaults to sde.T (full noise). '
                              'Use e.g. 0.5 to encode only halfway.')
+    parser.add_argument('--no_denoise', action='store_true', default=False,
+                        help='Skip final Tweedie denoising step at t=ε after decoding')
     parser.add_argument('--show_originals', action='store_true', default=False,
                         help='Prepend/append original images to each row for reference')
     args = parser.parse_args()
@@ -168,15 +170,25 @@ def main():
         print(f"    encode NFE: {sol.nfev}")
         return jnp.asarray(sol.y[:, -1]).reshape(shape)
 
-    def decode(z):
-        """Latent → image: integrate probability-flow ODE backward (t_enc → ε)."""
+    def decode(z, denoise=True):
+        """Latent → image: integrate probability-flow ODE backward (t_enc → ε).
+
+        If denoise=True, applies a final Tweedie denoising step at t=ε to
+        remove residual low-level noise before inverse-scaling.
+        """
         sol = integrate.solve_ivp(
             ode_fn, (t_enc, eps), np.array(z).reshape(-1),
             method='RK45', rtol=args.rtol, atol=args.atol
         )
         print(f"    decode NFE: {sol.nfev}")
-        x = jnp.asarray(sol.y[:, -1]).reshape(shape)
-        return inverse_scaler(x)
+        x_eps = jnp.asarray(sol.y[:, -1]).reshape(shape)
+
+        if denoise:
+            vec_eps = jnp.full((1,), eps)
+            _, sigma_eps = sde.marginal_prob(x_eps, eps)
+            x_eps = x_eps + sigma_eps ** 2 * score_fn(x_eps, vec_eps)
+
+        return inverse_scaler(x_eps)
 
     # ── Build pairs list ─────────────────────────────────────────────────────
     if args.n_celeba:
@@ -232,7 +244,7 @@ def main():
                 z_a = slerp(z1[0], z2[0], alpha)[None]
             else:  # tweedie
                 z_a = tweedie_blend(*tweedie_components, alpha)
-            img = decode(z_a)
+            img = decode(z_a, denoise=not args.no_denoise)
             imgs_list.append(np.clip(np.array(img), 0, 1))
             print(f"    step {i+1}/{args.n_interp}")
         imgs = np.concatenate(imgs_list, axis=0)  # (n_interp, H, H, C)
