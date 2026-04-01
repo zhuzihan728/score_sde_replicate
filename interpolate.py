@@ -61,16 +61,18 @@ def slerp(z1, z2, alpha):
     return (coeff1 * z1_flat + coeff2 * z2_flat).reshape(z1.shape)
 
 
-def tweedie_interp(z1, z2, alpha, score_fn, sde, rng):
-    """Tweedie denoising + re-noising interpolation.
+def tweedie_interp(z1, z2, alpha, score_fn, sde):
+    """Tweedie denoising + component-wise slerp interpolation.
 
     For VE SDE at t=T: p_T(z | x_0) = N(x_0, σ_max² I), so the Tweedie
     posterior mean estimate is  x̂_0 = z + σ_max² · s_θ(z, T).
 
     Steps:
       1. Estimate x̂_0 for each latent via Tweedie's formula.
-      2. Linear-interpolate in estimated image space.
-      3. Re-add fresh independent noise → valid VE latent at t=T.
+      2. Extract pure noise residuals: ε = (z - x̂_0) / σ_max.
+      3. Linear-interpolate the image components.
+      4. Slerp the noise residuals independently.
+      5. Recombine: z_α = x̂_0^(α) + σ_max · ε_α.
     """
     sigma_max = sde.sigma_max
     vec_T = jnp.full((1,), sde.T)
@@ -78,10 +80,13 @@ def tweedie_interp(z1, z2, alpha, score_fn, sde, rng):
     x0_1 = z1 + sigma_max ** 2 * score_fn(z1, vec_T)
     x0_2 = z2 + sigma_max ** 2 * score_fn(z2, vec_T)
 
-    x0_alpha = (1.0 - alpha) * x0_1 + alpha * x0_2
+    eps1 = (z1 - x0_1) / sigma_max
+    eps2 = (z2 - x0_2) / sigma_max
 
-    noise = jax.random.normal(rng, z1.shape)
-    return x0_alpha + sigma_max * noise
+    x0_alpha  = (1.0 - alpha) * x0_1 + alpha * x0_2
+    eps_alpha = slerp(eps1[0], eps2[0], alpha)[None]
+
+    return x0_alpha + sigma_max * eps_alpha
 
 
 def save_grid(imgs, path, nrow):
@@ -215,8 +220,7 @@ def main():
             if args.interp_method == 'slerp':
                 z_a = slerp(z1[0], z2[0], alpha)[None]
             else:  # tweedie
-                rng = jax.random.PRNGKey(args.seed * 10000 + pair_idx * 1000 + i)
-                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde, rng)
+                z_a = tweedie_interp(z1, z2, alpha, score_fn, sde)
             img = decode(z_a)
             imgs_list.append(np.clip(np.array(img), 0, 1))
             print(f"    step {i+1}/{args.n_interp}")
