@@ -1,18 +1,3 @@
-#!/usr/bin/env python
-"""
-sample_vesde.py — FID sweep over two models:
-  1. vesde_cifar10    (VE SDE, discrete)
-  2. ddpm_cifar10_low (VP SDE, discrete)
-
-Each model runs:
-  Predictors : ancestral, rev_diffusion, prob_flow
-  Step cfgs  : P1000, P2000, PC1000  (for each predictor)
-  + C2000 once (corrector-only, no predictor)
-
-Results → assets/samples/vesde_sweep/results.txt
-        → assets/samples/ddpm_sweep/results.txt
-"""
-
 import argparse, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import numpy as np
@@ -23,9 +8,7 @@ import orbax.checkpoint as ocp
 import tensorflow as tf
 import tensorflow_hub as tfhub
 
-# Give JAX exclusive use of the GPU; run TF (Inception) on CPU.
 tf.config.set_visible_devices([], 'GPU')
-
 
 from config import get_config
 from sde import VESDE, VPSDE
@@ -39,12 +22,10 @@ from samplers import (
 
 INCEPTION_URL = 'https://tfhub.dev/tensorflow/tfgan/eval/inception/1'
 
-# ── Shared ──────────────────────────────────────────────────────────────────────
 N_SAMP = 10_000
 BATCH  = 256
 SNR    = 0.16
 
-# (tag, N, n_corr_steps) — run for every predictor
 STEP_CONFIGS = [
     ('P1000',  1000, 0),
     ('P2000',  2000, 0),
@@ -57,10 +38,8 @@ PREDICTORS = {
     'prob_flow':     lambda sde, sf: ProbabilityFlowPredictor(sde, sf),
 }
 
-# C2000: corrector-only (no predictor), N=2000 timesteps × 1 Langevin step
 C2000 = ('C2000', 2000, 1)
 
-# ── Model specs ─────────────────────────────────────────────────────────────────
 MODELS = [
     {
         'name':     'vesde_cifar10',
@@ -81,18 +60,12 @@ MODELS = [
 ]
 
 
-# ── SDE factory ─────────────────────────────────────────────────────────────────
-
 def make_sde(sde_type, N, config):
     if sde_type == 'vesde':
         return VESDE(config.model.sigma_min, config.model.sigma_max, N)
-    else:
-        # Halve betas for N=2000 so the cumulative noise schedule is unchanged
-        factor = 2.0 if N == 2000 else 1.0
-        return VPSDE(config.model.beta_min / factor, config.model.beta_max / factor, N)
+    factor = 2.0 if N == 2000 else 1.0
+    return VPSDE(config.model.beta_min / factor, config.model.beta_max / factor, N)
 
-
-# ── Inception / FID ────────────────────────────────────────────────────────────
 
 @tf.function
 def _inception_batch(x_uint8, model):
@@ -141,12 +114,9 @@ def get_real_pool(config, inception_model):
     return real
 
 
-# ── Sampling ───────────────────────────────────────────────────────────────────
-
 def load_model(ckpt_path, config):
-    model = UNet(config=config)
-    path  = str(pathlib.Path(ckpt_path).resolve() / 'default')
-    params = ocp.PyTreeCheckpointer().restore(path)['ema_params']
+    model  = UNet(config=config)
+    params = ocp.PyTreeCheckpointer().restore(str(pathlib.Path(ckpt_path).resolve() / 'default'))['ema_params']
     return model, jax.device_put(params, jax.devices()[0])
 
 def make_sampler(sde, shape, pred, corr, inv_scaler, eps):
@@ -181,10 +151,7 @@ def generate_pool(sampler, rng, inception_model):
     return np.concatenate(pools)[:N_SAMP], rng
 
 
-# ── Per-model sweep ────────────────────────────────────────────────────────────
-
 def run_sweep(spec, inception, real_pool, rng):
-    """Run the full sampler sweep for one model spec."""
     out = spec['out']
     out.mkdir(parents=True, exist_ok=True)
     results_file = out / 'results.txt'
@@ -198,7 +165,6 @@ def run_sweep(spec, inception, real_pool, rng):
     print(f"\nLoading checkpoint: {spec['ckpt']}")
     model, params = load_model(spec['ckpt'], config)
 
-    # Score SDE always at training N=1000
     score_sde = make_sde(sde_type, 1000, config)
     score_fn  = get_score_fn(score_sde, model, params, train=False, continuous=False)
 
@@ -209,13 +175,12 @@ def run_sweep(spec, inception, real_pool, rng):
             if len(parts) == 3:
                 results[parts[0]] = (float(parts[1]), float(parts[2]))
 
-    # Build run list: predictor × step_config, then C2000 once
     runs = []
     for pred_name, pred_fn in PREDICTORS.items():
         for tag, N, n_corr in STEP_CONFIGS:
             runs.append((f"{pred_name}_{tag}", N, n_corr, pred_fn))
     tag, N, n_corr = C2000
-    runs.append((tag, N, n_corr, None))   # None → Predictor() (corrector-only)
+    runs.append((tag, N, n_corr, None))
 
     total = len(runs)
     for idx, (run_name, N, n_corr, pred_fn) in enumerate(runs, 1):
@@ -228,8 +193,7 @@ def run_sweep(spec, inception, real_pool, rng):
 
         sde  = make_sde(sde_type, N, config)
         pred = pred_fn(sde, score_fn) if pred_fn is not None else Predictor()
-        corr = (LangevinCorrector(sde, score_fn, SNR, n_corr)
-                if n_corr > 0 else Corrector())
+        corr = LangevinCorrector(sde, score_fn, SNR, n_corr) if n_corr > 0 else Corrector()
 
         sampler = make_sampler(sde, (BATCH, H, H, C), pred, corr, inv_scaler, eps)
 
@@ -259,16 +223,6 @@ def run_sweep(spec, inception, real_pool, rng):
     return rng
 
 
-# ── Draw trajectories ──────────────────────────────────────────────────────────
-#
-# Layout: 9 rows (3 predictors × 3 sub-rows) × 20 columns
-#   P2000  — predictor only, N=2000, snapshot every 100 steps  → 20 images
-#   C2000  — corrector only, N=2000, snapshot every 100 steps  → 20 images
-#   PC1000 — 1 C + 1 P per step, N=1000, every 100 steps take
-#             one C-snapshot then one P-snapshot               → 20 images
-#
-# All rows share the same starting latent x0.
-
 def draw_trajectories(spec, rng):
     SNAP_EVERY = 100
 
@@ -281,112 +235,90 @@ def draw_trajectories(spec, rng):
     print(f"Loading checkpoint: {spec['ckpt']}")
     model, params = load_model(spec['ckpt'], config)
 
-    # Score function always uses training SDE (N=1000, discrete)
     score_sde = make_sde(sde_type, 1000, config)
     score_fn  = get_score_fn(score_sde, model, params, train=False, continuous=False)
 
-    # Shared starting latent
     sde_2000 = make_sde(sde_type, 2000, config)
     rng, k   = jax.random.split(rng)
     x0       = sde_2000.prior_sampling(k, (1, H, H, C))
 
     def _snap(xm):
-        return np.clip(np.array(inv_scaler(xm)), 0, 1)[0]  # (H, W, C)
+        return np.clip(np.array(inv_scaler(xm)), 0, 1)[0]
 
     def run_p2000(pred_fn):
         sde  = make_sde(sde_type, 2000, config)
-        pred = pred_fn(sde, score_fn)
-        _p   = jax.jit(pred.update_fn)
+        _p   = jax.jit(pred_fn(sde, score_fn).update_fn)
         ts   = np.linspace(float(sde.T), eps, 2000)
         x    = x0
         snaps = []
         for i in range(2000):
             t = jnp.full((1,), ts[i])
-            rng_step = jax.random.fold_in(rng, i * 3)
-            x, xm = _p(rng_step, x, t)
+            x, xm = _p(jax.random.fold_in(rng, i * 3), x, t)
             if (i + 1) % SNAP_EVERY == 0:
                 snaps.append(_snap(xm))
-        return snaps  # 20 images
+        return snaps
 
-    def run_c2000(_):  # corrector-only row, predictor not used
+    def run_c2000(_):
         sde  = make_sde(sde_type, 2000, config)
-        corr = LangevinCorrector(sde, score_fn, SNR, n_steps=1)
-        _c   = jax.jit(corr.update_fn)
+        _c   = jax.jit(LangevinCorrector(sde, score_fn, SNR, n_steps=1).update_fn)
         ts   = np.linspace(float(sde.T), eps, 2000)
         x    = x0
         snaps = []
         for i in range(2000):
             t = jnp.full((1,), ts[i])
-            rng_step = jax.random.fold_in(rng, i * 3 + 1)
-            x, xm = _c(rng_step, x, t)
+            x, xm = _c(jax.random.fold_in(rng, i * 3 + 1), x, t)
             if (i + 1) % SNAP_EVERY == 0:
                 snaps.append(_snap(xm))
-        return snaps  # 20 images
+        return snaps
 
     def run_pc1000(pred_fn):
-        # N=1000 PC steps; every 100 steps capture C-snapshot then P-snapshot → 20 images
         sde  = make_sde(sde_type, 1000, config)
-        pred = pred_fn(sde, score_fn)
-        corr = LangevinCorrector(sde, score_fn, SNR, n_steps=1)
-        _c   = jax.jit(corr.update_fn)
-        _p   = jax.jit(pred.update_fn)
+        _c   = jax.jit(LangevinCorrector(sde, score_fn, SNR, n_steps=1).update_fn)
+        _p   = jax.jit(pred_fn(sde, score_fn).update_fn)
         ts   = np.linspace(float(sde.T), eps, 1000)
         x    = x0
         snaps = []
         for i in range(1000):
             t = jnp.full((1,), ts[i])
-            rng_c = jax.random.fold_in(rng, i * 3 + 2)
-            rng_p = jax.random.fold_in(rng, i * 3 + 2 + 10000)
-            x, xm_c = _c(rng_c, x, t)
-            x, xm_p = _p(rng_p, x, t)
+            x, xm_c = _c(jax.random.fold_in(rng, i * 3 + 2), x, t)
+            x, xm_p = _p(jax.random.fold_in(rng, i * 3 + 2 + 10000), x, t)
             if (i + 1) % SNAP_EVERY == 0:
-                snaps.append(_snap(xm_c))  # C snapshot
-                snaps.append(_snap(xm_p))  # P snapshot
-        return snaps  # 20 images (10 intervals × 2)
+                snaps.append(_snap(xm_c))
+                snaps.append(_snap(xm_p))
+        return snaps
 
-    pred_names = list(PREDICTORS.keys())
+    pred_names  = list(PREDICTORS.keys())
     sub_runners = [run_p2000, run_c2000, run_pc1000]
     sub_labels  = ['P2000', 'C2000', 'PC1000']
-    N_SNAPS = 20
+    N_SNAPS     = 20
 
-    # Collect all snapshots
     all_snaps = {}
     for pred_name, pred_fn in PREDICTORS.items():
         for label, runner in zip(sub_labels, sub_runners):
             print(f"  {pred_name} / {label} …", flush=True)
             all_snaps[(pred_name, label)] = runner(pred_fn)
 
-    # Plot: 9 rows × 20 cols
     n_rows = len(pred_names) * len(sub_labels)
-    fig, axes = plt.subplots(n_rows, N_SNAPS,
-                             figsize=(N_SNAPS * 1.0, n_rows * 1.1))
+    fig, axes = plt.subplots(n_rows, N_SNAPS, figsize=(N_SNAPS * 1.0, n_rows * 1.1))
     for pi, pred_name in enumerate(pred_names):
         for si, label in enumerate(sub_labels):
             row   = pi * len(sub_labels) + si
             snaps = all_snaps[(pred_name, label)]
             for col, img in enumerate(snaps):
                 ax = axes[row, col]
-                ax.imshow(img if C == 3 else img[..., 0],
-                          cmap=None if C == 3 else 'gray', vmin=0, vmax=1)
+                ax.imshow(img if C == 3 else img[..., 0], cmap=None if C == 3 else 'gray', vmin=0, vmax=1)
                 ax.axis('off')
-            if si == 0:
-                ylabel = f'{pi + 1}. {pred_name}\n{label}'
-            else:
-                ylabel = label
-            axes[row, 0].set_ylabel(ylabel, fontsize=6,
-                                    rotation=0, ha='right', va='center', labelpad=45)
+            ylabel = f'{pi + 1}. {pred_name}\n{label}' if si == 0 else label
+            axes[row, 0].set_ylabel(ylabel, fontsize=6, rotation=0, ha='right', va='center', labelpad=45)
 
-    # Global step header on top row (P2000): 100, 200, ..., 2000
     for col in range(N_SNAPS):
         axes[0, col].set_title(str((col + 1) * SNAP_EVERY), fontsize=6)
 
-    # Per-cell C/P step headers on every PC1000 row
     for pi in range(len(pred_names)):
-        pc_row = pi * len(sub_labels) + 2  # sub_labels index 2 = 'PC1000'
+        pc_row = pi * len(sub_labels) + 2
         for col in range(N_SNAPS):
             interval = (col // 2 + 1) * SNAP_EVERY
-            cp = 'C' if col % 2 == 0 else 'P'
-            axes[pc_row, col].set_title(f'{cp}{interval}', fontsize=5, pad=1)
+            axes[pc_row, col].set_title(f"{'C' if col % 2 == 0 else 'P'}{interval}", fontsize=5, pad=1)
 
     plt.subplots_adjust(wspace=0.02, hspace=0.05)
     out_path = spec['out'].parent / f"{spec['name']}_traj.png"
@@ -396,14 +328,10 @@ def draw_trajectories(spec, rng):
     print(f"Saved → {out_path}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('model', choices=['vesde', 'ddpm'],
-                        help='Which model to sweep: vesde or ddpm')
-    parser.add_argument('--draw', action='store_true',
-                        help='Draw denoising trajectories instead of running FID sweep')
+    parser.add_argument('model', choices=['vesde', 'ddpm'])
+    parser.add_argument('--draw', action='store_true')
     args = parser.parse_args()
 
     spec = next(m for m in MODELS if m['name'].startswith(args.model))
@@ -415,9 +343,7 @@ def main():
 
     print("Loading Inception …")
     inception = tfhub.load(INCEPTION_URL)
-
-    config_for_stats = get_config('vesde_ddpm_disc')
-    real_pool = get_real_pool(config_for_stats, inception)
+    real_pool = get_real_pool(get_config('vesde_ddpm_disc'), inception)
     print(f"  real pool_3: {real_pool.shape}")
 
     print(f"\n{'═'*50}")

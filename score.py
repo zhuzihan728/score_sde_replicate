@@ -10,10 +10,7 @@ def get_score_fn(sde, model, params, train=False, continuous=True, rng=None):
 
         if isinstance(sde, VESDE):
             sigma = sde.marginal_prob(x, t)[1]
-            if continuous:
-                time_cond = jnp.log(sigma)          # log(sigma) for continuous
-            else:
-                time_cond = sde.t_to_idx(t).astype(jnp.float32)  # integer index for discrete DDPM
+            time_cond = jnp.log(sigma) if continuous else sde.t_to_idx(t).astype(jnp.float32)
             output = model.apply(params, x, time_cond, train=train, rngs=rngs)
             return batch_mul(1.0 / sigma, output)
 

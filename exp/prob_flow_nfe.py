@@ -1,15 +1,5 @@
-#!/usr/bin/env python
-"""
-Checkpoint : runs/ncsnpp_celeba/ckpt/50000
-Config     : vesde_ncsnpp_celeba_disc
-Outputs    : assets/samples/ncsnpp_celeba-nfe/
-                nfe_sweep.npy      (n_tol, N_IMAGES, H, H, C)  float32
-                nfe_sweep_grid.png  rows = images, cols = tolerances (low→high)
-                nfe_log.txt         actual NFE recorded per tolerance level
-"""
 import argparse, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-import pathlib
 import numpy as np
 import jax, jax.numpy as jnp
 import orbax.checkpoint as ocp
@@ -27,23 +17,21 @@ VARIANTS = {
     'disc': ('runs/ncsnpp_celeba_disc/ckpt/50000', 'vesde_ncsnpp_celeba_disc'),
     'cont': ('runs/ncsnpp_celeba_cont/ckpt/50000', 'vesde_ncsnpp_celeba_cont'),
 }
-N_IMAGES  = 4
-SEED      = 123
+N_IMAGES = 4
+SEED     = 123
 
-# Tolerance sweep: loose → tight  (lower tol = more NFE = better quality)
 TOL_CONFIGS = [
     ('tol=1e-1', 1e-1, 1e-1),
     ('tol=1e-2', 1e-2, 1e-2),
     ('tol=1e-3', 1e-3, 1e-3),
     ('tol=1e-4', 1e-4, 1e-4),
-    ('tol=1e-5', 1e-5, 1e-5),   # reference quality
+    ('tol=1e-5', 1e-5, 1e-5),
 ]
 
 
 def load_ckpt(ckpt_path, config):
-    model = UNet(config=config)
-    default_path = str(pathlib.Path(ckpt_path).resolve() / 'default')
-    restored = ocp.PyTreeCheckpointer().restore(default_path)
+    model      = UNet(config=config)
+    restored   = ocp.PyTreeCheckpointer().restore(str(pathlib.Path(ckpt_path).resolve() / 'default'))
     ema_params = jax.device_put(restored['ema_params'], jax.devices()[0])
     return model, ema_params
 
@@ -65,24 +53,17 @@ def main():
 
     print(f"Loading {ckpt} …")
     model, ema_params = load_ckpt(ckpt, config)
-    score_fn = get_score_fn(sde, model, ema_params,
-                            train=False, continuous=config.training.continuous)
+    score_fn = get_score_fn(sde, model, ema_params, train=False, continuous=config.training.continuous)
 
     shape = (N_IMAGES, H, H, C)
-
-    # Fix the starting noise — same z for every tolerance level
     rng = jax.random.PRNGKey(args.seed)
     rng, k = jax.random.split(rng)
     z = sde.prior_sampling(k, shape)
-    print(f"Fixed prior noise z: shape={z.shape}")
 
-    all_imgs = []   # (n_tol, N_IMAGES, H, H, C)
-    nfe_log  = []
-
+    all_imgs, nfe_log = [], []
     for label, rtol, atol in TOL_CONFIGS:
         print(f"\nODE  {label}  rtol={rtol}  atol={atol} …", flush=True)
-        sampler_fn = ode_sampler(sde, score_fn, shape, inverse_scaler,
-                                 rtol=rtol, atol=atol, eps=eps)
+        sampler_fn = ode_sampler(sde, score_fn, shape, inverse_scaler, rtol=rtol, atol=atol, eps=eps)
         rng, k = jax.random.split(rng)
         imgs, nfe = sampler_fn(k, z=z)
         imgs = np.clip(np.array(imgs).reshape(N_IMAGES, H, H, C), 0.0, 1.0).astype(np.float32)
@@ -90,27 +71,21 @@ def main():
         nfe_log.append((label, nfe))
         print(f"  NFE={nfe}  done.", flush=True)
 
-    all_imgs = np.stack(all_imgs, axis=0)   # (n_tol, N_IMAGES, H, H, C)
+    all_imgs = np.stack(all_imgs, axis=0)
     np.save(str(out / 'nfe_sweep.npy'), all_imgs)
-    print(f"\nSaved {out}/nfe_sweep.npy  shape={all_imgs.shape}")
 
-    # ── NFE log ───────────────────────────────────────────────────────────────
     log_lines = [f"{lbl}  NFE={nfe}" for lbl, nfe in nfe_log]
     (out / 'nfe_log.txt').write_text('\n'.join(log_lines) + '\n')
     print('\n'.join(log_lines))
 
-    # ── Grid PNG: rows = images, cols = tolerance levels ─────────────────────
     n_tol = len(TOL_CONFIGS)
-    fig, axes = plt.subplots(N_IMAGES, n_tol,
-                             figsize=(n_tol * 2, N_IMAGES * 2))
-    for col, (label, rtol, atol) in enumerate(TOL_CONFIGS):
-        nfe_val = nfe_log[col][1]
-        axes[0, col].set_title(f"{label}\nNFE={nfe_val}", fontsize=7)
+    fig, axes = plt.subplots(N_IMAGES, n_tol, figsize=(n_tol * 2, N_IMAGES * 2))
+    for col, (label, _, _) in enumerate(TOL_CONFIGS):
+        axes[0, col].set_title(f"{label}\nNFE={nfe_log[col][1]}", fontsize=7)
         for row in range(N_IMAGES):
-            ax = axes[row, col]
             img = all_imgs[col, row]
-            ax.imshow(img if C == 3 else img[..., 0], cmap=None if C == 3 else 'gray')
-            ax.axis('off')
+            axes[row, col].imshow(img if C == 3 else img[..., 0], cmap=None if C == 3 else 'gray')
+            axes[row, col].axis('off')
 
     plt.tight_layout()
     grid_path = out / f'nfe_sweep_grid_{args.seed}.png'

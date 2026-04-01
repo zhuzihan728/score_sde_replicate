@@ -52,6 +52,7 @@ experiments/
 !envs/README.MLMI4.activate
 !envs/setup_mlmi4_env.sh
 !envs/requirements-hpc.txt
+!envs/setup_score_sde.sh
 
 # Init script
 init.sh

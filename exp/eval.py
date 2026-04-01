@@ -1,15 +1,7 @@
-#!/usr/bin/env python
 """
 eval.py — evaluate and visualise trained diffusion models.
 
-Default (no flags): benchmark all models → FID + IS + 8×8 grid.
-
-Common usage:
-  python eval.py                                          # full sweep, all models
-  python eval.py --model vpsde_disc                       # full eval for one model
-  python eval.py --model vpsde_disc --sample-only         # 8×8 grid only, no FID/IS
-  python eval.py --model vpsde_disc --plot corrector_sweep
-  python eval.py --ckpt runs/my/ckpt/100000 --config vpsde_ddpm_disc --sample-only
+Default (no flags): benchmark all models → FID + IS + 8x8 grid.
 """
 
 import argparse, pathlib, sys, time
@@ -22,7 +14,6 @@ import orbax.checkpoint as ocp
 import tensorflow as tf
 import tensorflow_hub as tfhub
 
-# Keep TF (Inception) on CPU — JAX pre-allocates most GPU memory.
 tf.config.set_visible_devices([], 'GPU')
 
 from config import get_config
@@ -36,15 +27,12 @@ from samplers import (
     LangevinCorrector, Corrector, Predictor, pc_sampler, ode_sampler,
 )
 
-# ── Constants ──────────────────────────────────────────────────────────────────
 INCEPTION_TFHUB = 'https://tfhub.dev/tensorflow/tfgan/eval/inception/1'
 N_SAMPLES  = 10_000
 BATCH_SIZE = 1024
 GRID_N     = 64
 OUT_ROOT   = pathlib.Path('assets/eval')
 
-# ── Model registry ─────────────────────────────────────────────────────────────
-# (display_name, config_name, ckpt_path, celeba_only)
 MODELS = [
     ('vpsde_disc',         'vpsde_ddpm_disc',         'runs/vpsde_cifar10_disc/ckpt/190000',    False),
     ('vpsde_cont',         'vpsde_ddpm_cont',          'runs/vpsde_cifar10_cont/ckpt/190000',    False),
@@ -58,7 +46,6 @@ MODELS = [
 ]
 MODELS_BY_NAME = {m[0]: m for m in MODELS}
 
-# Best PC per (sde, continuous)
 BEST_PC = {
     ('vesde',    True):  ('reverse_diffusion',  'langevin', 0.16),
     ('vesde',    False): ('reverse_diffusion',  'langevin', 0.16),
@@ -69,17 +56,11 @@ BEST_PC = {
 }
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
 def load_ckpt(ckpt_path, config):
-    H, C = config.data.image_size, config.data.num_channels
     model = UNet(config=config)
-    model.init(jax.random.PRNGKey(0), jnp.ones((1, H, H, C)), jnp.ones(1))
-    step = int(pathlib.Path(ckpt_path).name)
-    default_path = str(pathlib.Path(ckpt_path).resolve() / 'default')
-    restored = ocp.PyTreeCheckpointer().restore(default_path)
+    restored   = ocp.PyTreeCheckpointer().restore(str(pathlib.Path(ckpt_path).resolve() / 'default'))
     ema_params = jax.device_put(restored['ema_params'], jax.devices()[0])
-    return model, ema_params, step
+    return model, ema_params, int(pathlib.Path(ckpt_path).name)
 
 
 def build_predictor(pred_type, sde, score_fn):
@@ -100,7 +81,7 @@ def build_corrector(corr_type, sde, score_fn, snr, n_steps=1):
 
 def save_grid(imgs, path, nrow=8):
     n, H, W, C = imgs.shape
-    nrows = int(np.ceil(n / nrow))
+    nrows  = int(np.ceil(n / nrow))
     canvas = np.ones((nrows * H, nrow * W, C), dtype=np.float32)
     for idx, img in enumerate(imgs):
         r, c = divmod(idx, nrow)
@@ -110,13 +91,12 @@ def save_grid(imgs, path, nrow=8):
 
 
 def make_sampler(sde, shape, pred, corr, inverse_scaler, eps):
-    """JIT-compiled PC sampler via fori_loop (for bulk generation / FID)."""
     n_corr = getattr(corr, 'n_steps', 0) or 0
 
     @jax.jit
     def _sample(rng):
         rng, k = jax.random.split(rng)
-        x = sde.prior_sampling(k, shape)
+        x  = sde.prior_sampling(k, shape)
         ts = jnp.linspace(sde.T, eps, sde.N)
 
         def step(i, val):
@@ -138,8 +118,6 @@ def to_uint8(imgs):
     return (np.clip(imgs, 0.0, 1.0) * 255).astype(np.uint8)
 
 
-# ── Inception / FID / IS ───────────────────────────────────────────────────────
-
 @tf.function
 def _run_inception_batch(batch_uint8, model):
     x = (tf.cast(batch_uint8, tf.float32) - 127.5) / 127.5
@@ -157,10 +135,10 @@ def run_inception(samples_uint8, model, batch_size=500):
 
 def inception_score(logits):
     logits = logits.astype(np.float64)
-    log_p = (logits
-             - np.log(np.sum(np.exp(logits - logits.max(1, keepdims=True)), axis=1, keepdims=True))
-             - logits.max(1, keepdims=True))
-    p = np.exp(log_p)
+    log_p  = (logits
+              - np.log(np.sum(np.exp(logits - logits.max(1, keepdims=True)), axis=1, keepdims=True))
+              - logits.max(1, keepdims=True))
+    p  = np.exp(log_p)
     kl = (p * (log_p - np.log(p.mean(0)))).sum(1)
     return float(np.exp(kl.mean()))
 
@@ -206,8 +184,6 @@ def load_real_stats(config, inception_model):
     return real_pool3
 
 
-# ── Qualitative plots ──────────────────────────────────────────────────────────
-
 def plot_corrector_sweep(sde, score_fn, pred_type, corr_type, snr,
                          config, inverse_scaler, eps, out_dir, rng):
     H, C = config.data.image_size, config.data.num_channels
@@ -227,8 +203,7 @@ def plot_corrector_sweep(sde, score_fn, pred_type, corr_type, snr,
         sweep_imgs.append(np.clip(np.array(imgs), 0, 1))
         print(f"  n_corr={n_corr} done")
 
-    _, axes = plt.subplots(len(corr_steps_list), N_SWEEP,
-                           figsize=(N_SWEEP, len(corr_steps_list)))
+    _, axes = plt.subplots(len(corr_steps_list), N_SWEEP, figsize=(N_SWEEP, len(corr_steps_list)))
     for r, (n_corr, row_imgs) in enumerate(zip(corr_steps_list, sweep_imgs)):
         for c in range(N_SWEEP):
             ax = axes[r, c]
@@ -304,8 +279,6 @@ def plot_corrector_trace(sde, score_fn, pred_type, corr_type, snr,
     path = out_dir / 'corrector_trace.png'
     plt.imsave(str(path), canvas)
     print(f"  Saved {path}")
-    print(f"  Layout: {n_traj} rows × {ncols} cols  (6 per anchor: C₁|C₂|P|C₁|C₂|P)")
-    print(f"  Anchors: {cap_anchors}")
     return rng
 
 
@@ -361,8 +334,6 @@ def plot_trajectory(sde, score_fn, pred_type, corr_type, snr,
     path = out_dir / 'trajectory.png'
     plt.imsave(str(path), canvas)
     print(f"  Saved {path}")
-    print(f"  Layout: {n_traj} rows × {ncols} cols")
-    print(f"  Groups (step pairs): {[(s, s+1) for s in cap_anchors]}")
     return rng
 
 
@@ -404,42 +375,29 @@ def plot_perturb_recover(sde, score_fn, config, inverse_scaler, eps, out_dir, rn
     canvas = np.concatenate([_row(orig_disp), _row(latent_disp), _row(recovered)], axis=0)
     path = out_dir / 'perturb_recover.png'
     plt.imsave(str(path), canvas)
-    print(f"  Saved {path}  (rows: original | latent t=T | ODE recovered)")
+    print(f"  Saved {path}")
     np.save(str(out_dir / 'latents.npy'), np.array(x_T))
-    print(f"  Saved {out_dir}/latents.npy  shape={x_T.shape}")
     return rng
 
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
 
     src = parser.add_mutually_exclusive_group()
-    src.add_argument('--model', choices=list(MODELS_BY_NAME.keys()),
-                     help='Evaluate a single named model (default: all models)')
-    src.add_argument('--ckpt',
-                     help='Manual checkpoint path (also requires --config)')
+    src.add_argument('--model', choices=list(MODELS_BY_NAME.keys()))
+    src.add_argument('--ckpt')
 
-    parser.add_argument('--config',
-                        help='Config name from config.py (required with --ckpt)')
-    parser.add_argument('--sample-only', action='store_true',
-                        help='Save 8×8 grid only, skip FID/IS evaluation')
+    parser.add_argument('--config')
+    parser.add_argument('--sample-only', action='store_true')
     parser.add_argument('--plot',
                         choices=['corrector_sweep', 'corrector_trace', 'trajectory', 'perturb_recover'],
-                        default=None,
-                        help='Generate a qualitative plot (requires --model or --ckpt)')
-    parser.add_argument('--snap_steps', type=int, nargs='+',
-                        default=list(range(0, 1000, 100)),
-                        help='PC step indices to snapshot for trajectory/corrector_trace')
-    parser.add_argument('--n_intervals', type=int, default=None,
-                        help='Keep only the last N snap_steps intervals')
-    parser.add_argument('--corrector_steps', type=int, default=1,
-                        help='Langevin corrector steps for trajectory (default: 1)')
+                        default=None)
+    parser.add_argument('--snap_steps', type=int, nargs='+', default=list(range(0, 1000, 100)))
+    parser.add_argument('--n_intervals', type=int, default=None)
+    parser.add_argument('--corrector_steps', type=int, default=1)
     parser.add_argument('--seed',    type=int, default=42)
-    parser.add_argument('--out_dir', default=None,
-                        help='Output directory (default: assets/eval/<model>)')
+    parser.add_argument('--out_dir', default=None)
     args = parser.parse_args()
 
     if args.ckpt and not args.config:
@@ -447,7 +405,6 @@ def main():
     if args.plot and not (args.model or args.ckpt):
         parser.error('--plot requires --model or --ckpt')
 
-    # ── Build model list ──────────────────────────────────────────────────────
     if args.ckpt:
         model_list = [(args.config, args.config, args.ckpt, False)]
     elif args.model:
@@ -464,8 +421,7 @@ def main():
         print(f"\n{'='*60}")
         print(f"Model: {name}  ({ckpt_path})")
 
-        out_dir = (pathlib.Path(args.out_dir) if args.out_dir
-                   else OUT_ROOT / name)
+        out_dir = (pathlib.Path(args.out_dir) if args.out_dir else OUT_ROOT / name)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         config = get_config(cfg_name)
@@ -473,10 +429,8 @@ def main():
         sde, eps = get_sde(config)
         inverse_scaler = get_data_inverse_scaler(config.data.centered)
 
-        sde_type = config.training.sde
-        cont     = config.training.continuous
         pred_type, corr_type, snr = BEST_PC.get(
-            (sde_type, cont), ('reverse_diffusion', 'none', 0.16)
+            (config.training.sde, config.training.continuous), ('reverse_diffusion', 'none', 0.16)
         )
         if celeba_only:
             snr = 0.17
@@ -484,10 +438,8 @@ def main():
 
         print(f"  Loading {ckpt_path} …")
         model, ema_params, _ = load_ckpt(ckpt_path, config)
-        score_fn = get_score_fn(sde, model, ema_params,
-                                train=False, continuous=cont)
+        score_fn = get_score_fn(sde, model, ema_params, train=False, continuous=config.training.continuous)
 
-        # ── Qualitative plot ──────────────────────────────────────────────────
         if args.plot:
             plot_kwargs = dict(
                 sde=sde, score_fn=score_fn, pred_type=pred_type,
@@ -498,23 +450,15 @@ def main():
             if args.plot == 'corrector_sweep':
                 rng = plot_corrector_sweep(**plot_kwargs)
             elif args.plot == 'corrector_trace':
-                rng = plot_corrector_trace(**plot_kwargs,
-                                           snap_steps=args.snap_steps,
-                                           n_intervals=args.n_intervals)
+                rng = plot_corrector_trace(**plot_kwargs, snap_steps=args.snap_steps, n_intervals=args.n_intervals)
             elif args.plot == 'trajectory':
-                rng = plot_trajectory(**plot_kwargs,
-                                      snap_steps=args.snap_steps,
-                                      n_intervals=args.n_intervals,
-                                      corrector_steps=args.corrector_steps)
+                rng = plot_trajectory(**plot_kwargs, snap_steps=args.snap_steps, n_intervals=args.n_intervals, corrector_steps=args.corrector_steps)
             elif args.plot == 'perturb_recover':
-                rng = plot_perturb_recover(sde, score_fn, config,
-                                           inverse_scaler, eps, out_dir, rng)
+                rng = plot_perturb_recover(sde, score_fn, config, inverse_scaler, eps, out_dir, rng)
             continue
 
-        # ── Sample-only: 8×8 grid, no FID/IS ─────────────────────────────────
         if args.sample_only or celeba_only:
-            reason = "CelebA" if celeba_only else "--sample-only"
-            print(f"  Generating 8×8 grid ({reason}) …")
+            print(f"  Generating 8×8 grid …")
             pred = build_predictor(pred_type, sde, score_fn)
             corr = build_corrector(corr_type, sde, score_fn, snr)
             grid_sampler = make_sampler(sde, (GRID_N, H, H, C), pred, corr, inverse_scaler, eps)
@@ -523,7 +467,6 @@ def main():
             save_grid(np.clip(np.array(grid_imgs), 0.0, 1.0), out_dir / 'grid.png', nrow=8)
             continue
 
-        # ── Full eval: check cache ────────────────────────────────────────────
         result_file = out_dir / 'result.txt'
         if result_file.exists():
             parts = result_file.read_text().split()
@@ -532,15 +475,12 @@ def main():
             results.append((name, IS, FID, elapsed))
             continue
 
-        # ── Lazy-load Inception + real stats on first CIFAR model ─────────────
         if inception_model is None:
             print("Loading InceptionV1 …")
             inception_model = tfhub.load(INCEPTION_TFHUB)
-            cifar_config = get_config('vpsde_ddpm_disc')
-            real_pool3   = load_real_stats(cifar_config, inception_model)
+            real_pool3 = load_real_stats(get_config('vpsde_ddpm_disc'), inception_model)
             print(f"  Real pool_3: {real_pool3.shape}")
 
-        # ── 10k samples → FID + IS + grid ────────────────────────────────────
         pred = build_predictor(pred_type, sde, score_fn)
         corr = build_corrector(corr_type, sde, score_fn, snr)
 
@@ -567,10 +507,7 @@ def main():
             print(f"  Generated in {elapsed:.0f}s")
 
             save_grid(samples[:GRID_N], out_dir / 'grid.png', nrow=8)
-
-            samples_file = out_dir / 'samples.npz'
-            np.savez_compressed(samples_file, samples=samples)
-            print(f"  Saved samples → {samples_file}")
+            np.savez_compressed(out_dir / 'samples.npz', samples=samples)
 
             print("  Running Inception …")
             gen_pool3, gen_logits = run_inception(to_uint8(samples), inception_model)

@@ -15,11 +15,9 @@ from samplers import EulerMaruyamaPredictor, ReverseDiffusionPredictor, Langevin
 
 
 def save_and_verify(ckpt_mgr, step, state, ckpt_dir):
-    """Save checkpoint and verify it was written correctly. Raises on failure."""
     import shutil
     ckpt_mgr.save(step, args=ocp.args.StandardSave(state))
     ckpt_mgr.wait_until_finished()
-    # Remove any leftover tmp dirs from a failed save
     for tmp in pathlib.Path(ckpt_dir).glob('*.orbax-checkpoint-tmp'):
         shutil.rmtree(tmp)
         print(f"  removed stale tmp: {tmp.name}")
@@ -30,7 +28,6 @@ def save_and_verify(ckpt_mgr, step, state, ckpt_dir):
 
 
 def backup_to_drive(logdir, drive_root, step):
-    """Copy entire logdir to <drive_root>/<step>/."""
     import shutil
     dst = pathlib.Path(drive_root) / str(step)
     dst.mkdir(parents=True, exist_ok=True)
@@ -68,7 +65,7 @@ def train(config, logdir, drive_backup=None):
         optax.clip_by_global_norm(config.training.grad_clip),
         optax.adam(learning_rate=schedule),
     )
-    opt_state = optimizer.init(params)
+    opt_state  = optimizer.init(params)
     ema_params = params
     start_step = 1
 
@@ -78,8 +75,7 @@ def train(config, logdir, drive_backup=None):
         options=ocp.CheckpointManagerOptions(max_to_keep=2, create=True),
     )
     if ckpt_mgr.latest_step() is not None:
-        target = {'params': params, 'ema_params': ema_params,
-                  'opt_state': opt_state, 'step': 0}
+        target = {'params': params, 'ema_params': ema_params, 'opt_state': opt_state, 'step': 0}
         r = ckpt_mgr.restore(ckpt_mgr.latest_step(), args=ocp.args.StandardRestore(target))
         params, ema_params, opt_state = r['params'], r['ema_params'], r['opt_state']
         start_step = int(r['step']) + 1
@@ -107,8 +103,6 @@ def train(config, logdir, drive_backup=None):
     @jax.jit
     def pc_sample(rng, params):
         score_fn = get_score_fn(sde, model, params, continuous=config.training.continuous)
-        # VE (discrete + continuous): reverse-diffusion predictor (reference for both)
-        # VP / sub-VP: Euler-Maruyama
         if isinstance(sde, VESDE):
             predictor = ReverseDiffusionPredictor(sde, score_fn)
         else:
@@ -174,13 +168,10 @@ def train(config, logdir, drive_backup=None):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--config', required=True,
-                   help=f'Config name. Available: {sorted(__import__("config").CONFIGS)}')
+    p.add_argument('--config', required=True)
     p.add_argument('--logdir', required=True)
-    p.add_argument('--n_iters', type=int, default=None,
-                   help='Override config n_iters (useful for short continuation runs)')
-    p.add_argument('--drive_backup', default=None,
-                   help='If set, mirror logdir here after every checkpoint (e.g. /content/drive/MyDrive/ncsnpp_celeba_cont)')
+    p.add_argument('--n_iters', type=int, default=None)
+    p.add_argument('--drive_backup', default=None)
     args = p.parse_args()
     cfg = get_config(args.config)
     if args.n_iters is not None:

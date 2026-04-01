@@ -51,7 +51,6 @@ def get_vesde_ddpm(continuous=False):
 
 
 def _ncsnpp_model(ema_rate, embedding_type, fir, progressive_input, **sde_params):
-    """BigGAN resblocks + skip_rescale=True + 4 res blocks per resolution."""
     m = ml_collections.ConfigDict()
     m.nf = 128; m.ch_mult = (1, 2, 2, 2); m.num_res_blocks = 4
     m.attn_resolutions = (16,); m.dropout = 0.1
@@ -66,10 +65,6 @@ def _ncsnpp_model(ema_rate, embedding_type, fir, progressive_input, **sde_params
 
 
 def get_ddpmpp_vpsde():
-    """DDPM++ continuous VP SDE.
-    Reference: score_sde/configs/vp/cifar10_ddpmpp_continuous.py
-    No FIR, no progressive input, positional (sinusoidal) embedding.
-    """
     cfg = ml_collections.ConfigDict()
     cfg.data = _cifar10_data(centered=True)
     cfg.model = _ncsnpp_model(ema_rate=0.9999, embedding_type='positional',
@@ -80,10 +75,6 @@ def get_ddpmpp_vpsde():
 
 
 def get_ncsnpp_vesde():
-    """NCSN++ continuous VE SDE.
-    Reference: score_sde/configs/ve/cifar10_ncsnpp_continuous.py
-    FIR, residual progressive input, Fourier (GFF) embedding.
-    """
     cfg = ml_collections.ConfigDict()
     cfg.data = _cifar10_data(centered=False)
     cfg.model = _ncsnpp_model(ema_rate=0.999, embedding_type='fourier',
@@ -94,10 +85,6 @@ def get_ncsnpp_vesde():
 
 
 def get_ncsnpp_vesde_celeba():
-    """NCSN++ discrete VE SDE (SMLD) on CelebA 64x64.
-    Reference: score_sde/configs/ve/celeba_ncsnpp.py
-    Discrete SMLD: positional (sinusoidal) embedding, sigma_max=90, snr=0.17.
-    """
     cfg = ml_collections.ConfigDict()
     cfg.data = ml_collections.ConfigDict()
     cfg.data.dataset = 'celeba'; cfg.data.image_size = 64; cfg.data.num_channels = 3
@@ -107,15 +94,11 @@ def get_ncsnpp_vesde_celeba():
                               fir=True, progressive_input='residual',
                               sigma_min=0.01, sigma_max=90.0)
     cfg.training = _training('vesde', continuous=False, reduce_mean=False)
-    cfg.training.snr = 0.17   # CelebA uses 0.17 (vs 0.16 for CIFAR-10)
+    cfg.training.snr = 0.17
     return cfg
 
 
 def get_ncsnpp_vesde_celeba_cont():
-    """NCSN++ continuous VE SDE on CelebA 64x64.
-    Same architecture as the discrete version but with continuous=True
-    and Fourier (GFF) time embedding, matching the CIFAR-10 continuous setup.
-    """
     cfg = ml_collections.ConfigDict()
     cfg.data = ml_collections.ConfigDict()
     cfg.data.dataset = 'celeba'; cfg.data.image_size = 64; cfg.data.num_channels = 3
@@ -130,10 +113,6 @@ def get_ncsnpp_vesde_celeba_cont():
 
 
 def get_subvpsde_ddpm():
-    """sub-VP SDE, continuous, DDPM model.
-    Reference: score_sde/configs/subvp/cifar10_ddpm_continuous.py
-    Shares VP beta schedule; only continuous variant exists in reference.
-    """
     cfg = ml_collections.ConfigDict()
     cfg.data = _cifar10_data(centered=True)
     cfg.model = _ddpm_model(ema_rate=0.9999, embedding_type='positional',
