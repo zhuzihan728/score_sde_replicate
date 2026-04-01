@@ -207,19 +207,20 @@ def main():
             for i in range(args.n_celeba)
         ]
     else:
+        indices = sorted({p.stem.split('-')[0] for p in IMG_DIR.glob('*-1.jpg')},
+                         key=lambda s: int(s))
         pairs = []
-        idx = 1
-        while True:
+        for idx in indices:
             p1 = IMG_DIR / f'{idx}-1.jpg'
             p2 = IMG_DIR / f'{idx}-2.jpg'
-            if not p1.exists() or not p2.exists():
-                break
+            if not p2.exists():
+                print(f"  Warning: {p1.name} has no matching {p2.name}, skipping.")
+                continue
             pairs.append((
                 jnp.asarray(scaler(load_image(p1, H)))[None],
                 jnp.asarray(scaler(load_image(p2, H)))[None],
-                f'{idx:02d}',
+                f'{int(idx):02d}',
             ))
-            idx += 1
 
     # ── Interpolation loop ────────────────────────────────────────────────────
     all_rows = []
