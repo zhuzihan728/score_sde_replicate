@@ -1,4 +1,4 @@
-import argparse, functools, pathlib, time
+import argparse, functools, pathlib
 import numpy as np
 import jax, jax.numpy as jnp
 import optax
@@ -14,12 +14,33 @@ from score import get_score_fn
 from samplers import EulerMaruyamaPredictor, ReverseDiffusionPredictor, LangevinCorrector
 
 
-def train(config, logdir):
+def save_and_verify(ckpt_mgr, step, state, ckpt_dir):
+    import shutil
+    ckpt_mgr.save(step, args=ocp.args.StandardSave(state))
+    ckpt_mgr.wait_until_finished()
+    for tmp in pathlib.Path(ckpt_dir).glob('*.orbax-checkpoint-tmp'):
+        shutil.rmtree(tmp)
+        print(f"  removed stale tmp: {tmp.name}")
+    saved = ckpt_mgr.latest_step()
+    if saved != step:
+        raise RuntimeError(f"Checkpoint verification failed at step {step}: latest_step()={saved}")
+    print(f"  checkpoint saved ✓  step={step}")
+
+
+def backup_to_drive(logdir, drive_root, step):
+    import shutil
+    dst = pathlib.Path(drive_root) / str(step)
+    dst.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(logdir, dst, dirs_exist_ok=True)
+    print(f"  drive backup ✓  → {dst}")
+
+
+def train(config, logdir, drive_backup=None):
     n_dev = jax.local_device_count()
     assert config.training.batch_size % n_dev == 0
     local_bs = config.training.batch_size // n_dev
     H, C = config.data.image_size, config.data.num_channels
-    ckpt_dir = f'{logdir}/ckpt'
+    ckpt_dir = str(pathlib.Path(f'{logdir}/ckpt').resolve())
 
     writer = tf.summary.create_file_writer(logdir)
     rng = jax.random.PRNGKey(0)
@@ -44,19 +65,18 @@ def train(config, logdir):
         optax.clip_by_global_norm(config.training.grad_clip),
         optax.adam(learning_rate=schedule),
     )
-    opt_state = optimizer.init(params)
+    opt_state  = optimizer.init(params)
     ema_params = params
     start_step = 1
 
     pathlib.Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
     ckpt_mgr = ocp.CheckpointManager(
-        ckpt_dir, ocp.PyTreeCheckpointer(),
+        ckpt_dir,
         options=ocp.CheckpointManagerOptions(max_to_keep=2, create=True),
     )
     if ckpt_mgr.latest_step() is not None:
-        target = {'params': params, 'ema_params': ema_params,
-                  'opt_state': opt_state, 'step': 0}
-        r = ckpt_mgr.restore(ckpt_mgr.latest_step(), items=target)
+        target = {'params': params, 'ema_params': ema_params, 'opt_state': opt_state, 'step': 0}
+        r = ckpt_mgr.restore(ckpt_mgr.latest_step(), args=ocp.args.StandardRestore(target))
         params, ema_params, opt_state = r['params'], r['ema_params'], r['opt_state']
         start_step = int(r['step']) + 1
         print(f"Resumed from step {start_step - 1}")
@@ -83,8 +103,6 @@ def train(config, logdir):
     @jax.jit
     def pc_sample(rng, params):
         score_fn = get_score_fn(sde, model, params, continuous=config.training.continuous)
-        # VE (discrete + continuous): reverse-diffusion predictor (reference for both)
-        # VP / sub-VP: Euler-Maruyama
         if isinstance(sde, VESDE):
             predictor = ReverseDiffusionPredictor(sde, score_fn)
         else:
@@ -108,7 +126,6 @@ def train(config, logdir):
         return jnp.clip(inverse_scaler(x_mean), 0.0, 1.0)
 
     ema_decay = config.model.ema_rate
-    last_sample_t = time.time()
     print(f"{config.training.sde} continuous={config.training.continuous} | "
           f"{n_dev} device(s) | {config.training.n_iters:,} steps | {logdir}")
 
@@ -125,7 +142,7 @@ def train(config, logdir):
         if step % 500 == 0:
             print(f"  step {step:7d}  loss {float(loss[0]):.4f}")
 
-        if time.time() - last_sample_t >= 30 * 60:
+        if step % 10_000 == 0:
             print(f"  [step {step}] sampling...")
             rng, srng = jax.random.split(rng)
             imgs = np.array(pc_sample(srng, unre(ema_params)))
@@ -134,13 +151,16 @@ def train(config, logdir):
             with writer.as_default():
                 tf.summary.image('samples/pc_4', grid, step=step)
             writer.flush()
-            last_sample_t = time.time()
 
-        if step % 10_000 == 0:
-            ckpt_mgr.save(step, items={
+        is_last = (step == config.training.n_iters)
+        if step % 10_000 == 0 or is_last or step == start_step:
+            state = {
                 'params': unre(params), 'ema_params': unre(ema_params),
                 'opt_state': unre(opt_state), 'step': step,
-            })
+            }
+            save_and_verify(ckpt_mgr, step, state, ckpt_dir)
+            if drive_backup is not None:
+                backup_to_drive(logdir, drive_backup, step)
 
     writer.flush()
     print("Done.")
@@ -148,13 +168,12 @@ def train(config, logdir):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--config', required=True,
-                   help=f'Config name. Available: {sorted(__import__("config").CONFIGS)}')
+    p.add_argument('--config', required=True)
     p.add_argument('--logdir', required=True)
-    p.add_argument('--n_iters', type=int, default=None,
-                   help='Override config n_iters (useful for short continuation runs)')
+    p.add_argument('--n_iters', type=int, default=None)
+    p.add_argument('--drive_backup', default=None)
     args = p.parse_args()
     cfg = get_config(args.config)
     if args.n_iters is not None:
         cfg.training.n_iters = args.n_iters
-    train(cfg, args.logdir)
+    train(cfg, args.logdir, drive_backup=args.drive_backup)
