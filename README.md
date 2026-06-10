@@ -4,6 +4,10 @@ Replicated paper: [Score-Based Generative Modeling through Stochastic Differenti
 
 ---
 
+## Deliverable
+
+[Poster](./MLMI_4_Poster_snapshot.pdf)
+
 ## Train
 
 Specify a config (SDE type + model architecture) and an output directory. Checkpoints are saved every 10k steps and training can be resumed automatically.
